@@ -19,6 +19,7 @@ final class AppModel {
     private var lastPresent = 0.0
     private var wasAlerted = false
     private var wasCalibrated = false
+    private var emaTilt = 0.0          // smoothed shoulder tilt for the (jittery) lean bar
     private var frames = 0
     private let cueDir = Bundle.main.resourcePath ?? "cues"
     private let logURL = URL(fileURLWithPath: "/tmp/posture-monitor.log")
@@ -75,6 +76,7 @@ final class AppModel {
         let width = present ? r.faceSize : nil
         let tiltDeg = lastMP.shouldersFound ? (lastMP.tiltDeg ?? 0) : 0
         let tilt: Double? = present ? tiltDeg : nil
+        emaTilt = emaTilt * 0.9 + tiltDeg * 0.1     // heavy smoothing -> the lean bar glides
 
         let res = logic.update(now: now, present: present, head: head, tilt: tilt, width: width)
 
@@ -109,7 +111,7 @@ final class AppModel {
 
         // Three dimensions, each 0..1 (1 = matches your calibrated baseline).
         let headFrac = max(0, min(1, res.ratio))
-        let leanFrac = logic.calibrated ? max(0, 1 - abs(tiltDeg - logic.baseTilt) / logic.tiltThresh) : 1
+        let leanFrac = logic.calibrated ? max(0, 1 - abs(emaTilt - logic.baseTilt) / logic.tiltThresh) : 1
         let distFrac = (logic.calibrated && logic.baseWidth > 0)
             ? max(0, min(1, logic.baseWidth / max(0.0001, r.faceSize))) : 1
         // Composite score = the weakest dimension, so any problem pulls it below 100.
