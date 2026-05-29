@@ -1,0 +1,15 @@
+# build output
+app/PostureMonitor.app/
+app/posture-monitor
+/tmp/
+
+# python
+.venv/
+__pycache__/
+*.pyc
+
+# large model (download separately — see README)
+server/pose_landmarker_heavy.task
+
+# secrets
+server/secret.token
