@@ -116,20 +116,38 @@ def selftest():
           % (best[1], best[2], best[3], best[0] * 100))
 
 
+def write_config(sens, tilt, margin):
+    path = os.path.expanduser("~/.posturemonitor.json")
+    cfg = {}
+    if os.path.exists(path):
+        try:
+            cfg = json.load(open(path))
+        except Exception:
+            cfg = {}
+    cfg.update({"sensitivity": round(sens, 3), "tiltThresh": float(tilt), "proximityMargin": round(margin, 3)})
+    json.dump(cfg, open(path, "w"), indent=2)
+    print("wrote tuned thresholds to", path, "- the app picks them up on next launch.")
+
+
 def main():
-    if len(sys.argv) < 2 or sys.argv[1] == "--selftest":
+    args = [a for a in sys.argv[1:] if a != "--write"]
+    write = "--write" in sys.argv
+    if not args or args[0] == "--selftest":
         selftest(); return
     data = []
-    for clip in sys.argv[1:]:
+    for clip in args:
         print("labeling", os.path.basename(clip), "with Claude vision…")
         data += dataset_from_clip(clip)
     if not data:
         print("no labeled frames — record clips with the app (they include sidecars) first."); return
     best = grid_search(data)
-    print("\n%d labeled frames across %d clip(s)" % (len(data), len(sys.argv) - 1))
+    print("\n%d labeled frames across %d clip(s)" % (len(data), len(args)))
     print("BEST thresholds vs Claude: sensitivity=%.2f tilt=%d° proximity=%.2f  (agreement %.0f%%)"
           % (best[1], best[2], best[3], best[0] * 100))
-    print("Put these in PostureLogic (sensitivity / tiltThresh / proximityMargin).")
+    if write:
+        write_config(best[1], best[2], best[3])
+    else:
+        print("(re-run with --write to apply these to ~/.posturemonitor.json)")
 
 
 if __name__ == "__main__":

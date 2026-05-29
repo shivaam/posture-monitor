@@ -5,7 +5,7 @@ cd "$(dirname "$0")"
 
 APP="PostureMonitor.app"
 echo "compiling…"
-swiftc Engines.swift Views.swift main.swift -O -o /tmp/PostureMonitor.bin
+swiftc Engines.swift Views.swift Config.swift main.swift -O -o /tmp/PostureMonitor.bin
 
 echo "assembling $APP…"
 rm -rf "$APP"

@@ -11,6 +11,7 @@ final class AppModel {
     let vision = VisionEngine()
     let mp = MediaPipeClient()
     let logic = PostureLogic()
+    let config = Config.load()
     var muted = false
     var paused = false
 
@@ -41,13 +42,18 @@ final class AppModel {
     var onCameraDenied: (() -> Void)?
 
     func start() {
+        logic.sensitivity = config.sensitivity        // tunable defaults from config
+        logic.tiltThresh = config.tiltThresh
+        logic.proximityMargin = config.proximityMargin
         vision.onVision = { [weak self] r in self?.feedVision(r) }
         vision.onFrameJPEG = { [weak self] d in if self?.paused == false { self?.mp.send(d) } }
         vision.onCameraDenied = { [weak self] in self?.onCameraDenied?() }
         mp.onReading = { [weak self] r in self?.lastMP = r }
         vision.start()
-        vision.startRecording()        // auto-record from launch (for training clips)
-        log("recording started (auto)")
+        if config.autoRecord {
+            vision.startRecording()    // auto-record from launch (for training clips)
+            log("recording started (auto)")
+        }
     }
     func recalibrate() { logic.recalibrate(); wasCalibrated = false }
 
@@ -285,15 +291,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pauseButton = NSButton(title: "Pause", target: self, action: #selector(togglePause))
         pauseButton.frame = NSRect(x: 122, y: 16, width: 76, height: 30); pauseButton.bezelStyle = .rounded
         content.addSubview(pauseButton)
-        recordButton = NSButton(title: "⏸ Rec", target: self, action: #selector(toggleRecord))   // auto-recording at launch
+        let rec = model.config.autoRecord
+        recordButton = NSButton(title: rec ? "⏸ Rec" : "● Rec", target: self, action: #selector(toggleRecord))
         recordButton.frame = NSRect(x: 204, y: 16, width: 96, height: 30); recordButton.bezelStyle = .rounded
-        recordButton.contentTintColor = Palette.alert
+        recordButton.contentTintColor = rec ? Palette.alert : nil
         content.addSubview(recordButton)
         let mute = NSButton(checkboxWithTitle: "Mute", target: self, action: #selector(toggleMute))
         mute.frame = NSRect(x: 312, y: 20, width: 64, height: 22); content.addSubview(mute)
         let calLbl = mk("sensitivity", 11, .regular, Palette.textMuted)
         calLbl.frame = NSRect(x: 392, y: 20, width: 70, height: 18); content.addSubview(calLbl)
-        let sens = NSSlider(value: 0.85, minValue: 0.70, maxValue: 0.95, target: self, action: #selector(sens(_:)))
+        let sens = NSSlider(value: model.config.sensitivity, minValue: 0.70, maxValue: 0.95, target: self, action: #selector(sens(_:)))
         sens.frame = NSRect(x: 470, y: 20, width: 250, height: 22); content.addSubview(sens)
 
         window.contentView = content
