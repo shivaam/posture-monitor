@@ -50,6 +50,18 @@ final class AppModel {
     func recalibrate() { logic.recalibrate() }
     func setSource(_ s: Source) { source = s; logic.recalibrate() }
 
+    /// Toggle clip recording. Calls back with the new recording state.
+    func toggleRecord(_ done: @escaping (Bool) -> Void) {
+        if vision.isRecording {
+            vision.stopRecording { [weak self] url in
+                if let u = url { self?.log("saved clip -> \(u.path)") }
+                done(false)
+            }
+        } else {
+            vision.startRecording(); log("recording started"); done(true)
+        }
+    }
+
     private func feedVision(_ r: VisionReading) {
         lastVision = r
         let now = ProcessInfo.processInfo.systemUptime
@@ -201,6 +213,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mpLabel: NSTextField!
     private var bars: [String: BarView] = [:]
     private var pauseButton: NSButton!
+    private var recordButton: NSButton!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let rect = NSRect(x: 0, y: 0, width: 740, height: 480)
@@ -236,17 +249,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // controls
         let cal = NSButton(title: "Calibrate", target: self, action: #selector(calibrate))
-        cal.frame = NSRect(x: 16, y: 18, width: 110, height: 30); cal.bezelStyle = .rounded; cal.keyEquivalent = "\r"
+        cal.frame = NSRect(x: 16, y: 16, width: 100, height: 30); cal.bezelStyle = .rounded; cal.keyEquivalent = "\r"
         content.addSubview(cal)
         pauseButton = NSButton(title: "Pause", target: self, action: #selector(togglePause))
-        pauseButton.frame = NSRect(x: 134, y: 18, width: 80, height: 30); pauseButton.bezelStyle = .rounded
+        pauseButton.frame = NSRect(x: 122, y: 16, width: 76, height: 30); pauseButton.bezelStyle = .rounded
         content.addSubview(pauseButton)
+        recordButton = NSButton(title: "Record", target: self, action: #selector(toggleRecord))
+        recordButton.frame = NSRect(x: 204, y: 16, width: 92, height: 30); recordButton.bezelStyle = .rounded
+        content.addSubview(recordButton)
         let mute = NSButton(checkboxWithTitle: "Mute", target: self, action: #selector(toggleMute))
-        mute.frame = NSRect(x: 226, y: 22, width: 64, height: 22); content.addSubview(mute)
-        let mpT = NSButton(checkboxWithTitle: "MediaPipe drives alerts", target: self, action: #selector(toggleSource))
-        mpT.frame = NSRect(x: 300, y: 22, width: 210, height: 22); content.addSubview(mpT)
+        mute.frame = NSRect(x: 304, y: 20, width: 64, height: 22); content.addSubview(mute)
+        let mpT = NSButton(checkboxWithTitle: "MediaPipe alerts", target: self, action: #selector(toggleSource))
+        mpT.frame = NSRect(x: 374, y: 20, width: 170, height: 22); content.addSubview(mpT)
         let sens = NSSlider(value: 0.85, minValue: 0.70, maxValue: 0.95, target: self, action: #selector(sens(_:)))
-        sens.frame = NSRect(x: 560, y: 22, width: 160, height: 22); content.addSubview(sens)
+        sens.frame = NSRect(x: 560, y: 20, width: 160, height: 22); content.addSubview(sens)
 
         window.contentView = content
         window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
@@ -279,6 +295,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let t = NSTextField(labelWithString: s); t.font = .systemFont(ofSize: size, weight: w); t.textColor = col; return t
     }
 
+    @objc private func toggleRecord() {
+        model.toggleRecord { [weak self] recording in
+            self?.recordButton.title = recording ? "● Stop" : "Record"
+            self?.recordButton.contentTintColor = recording ? Palette.alert : nil
+        }
+    }
     @objc private func calibrate() { model.recalibrate() }
     @objc private func togglePause() { model.paused.toggle(); pauseButton.title = model.paused ? "Resume" : "Pause" }
     @objc private func toggleMute(_ b: NSButton) { model.muted = (b.state == .on) }

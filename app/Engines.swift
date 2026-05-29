@@ -104,10 +104,15 @@ final class VisionEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
     private let ciContext = CIContext()
     private var lastProc = 0.0
     private var lastJPEG = 0.0
+    let recorder = ClipRecorder()
 
     var onVision: ((VisionReading) -> Void)?       // ~8 fps, main thread
     var onFrameJPEG: ((Data) -> Void)?             // ~2 fps, for MediaPipe
     var onCameraDenied: (() -> Void)?
+
+    var isRecording: Bool { recorder.isRecording }
+    func startRecording() { recorder.start() }
+    func stopRecording(_ done: @escaping (URL?) -> Void) { recorder.stop(done) }
 
     func start() {
         AVCaptureDevice.requestAccess(for: .video) { ok in
@@ -133,6 +138,7 @@ final class VisionEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer,
                        from connection: AVCaptureConnection) {
+        recorder.append(sampleBuffer)      // every frame when recording (camera queue)
         let now = ProcessInfo.processInfo.systemUptime
         // Forward a downsized JPEG to MediaPipe as fast as it keeps up (~5 fps;
         // requests drop while one is in flight) for smoother live pointers.
@@ -224,5 +230,64 @@ final class MediaPipeClient {
             }
         }
         return r
+    }
+}
+
+// MARK: - Clip recorder (low-bitrate camera clips for training + offline analysis)
+
+final class ClipRecorder {
+    private var writer: AVAssetWriter?
+    private var input: AVAssetWriterInput?
+    private var started = false
+    private(set) var isRecording = false
+    private(set) var lastURL: URL?
+
+    private let dir: URL = {
+        let d = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Movies/PostureMonitor")
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        return d
+    }()
+
+    func start() {
+        guard !isRecording else { return }
+        let f = DateFormatter(); f.dateFormat = "yyyyMMdd-HHmmss"
+        lastURL = dir.appendingPathComponent("clip_\(f.string(from: Date())).mp4")
+        writer = nil; input = nil; started = false
+        isRecording = true
+    }
+
+    /// Called every camera frame (on the camera queue). Lazily builds the writer
+    /// from the first frame's dimensions; encodes at a low bitrate (small files).
+    func append(_ sb: CMSampleBuffer) {
+        guard isRecording, let url = lastURL else { return }
+        if writer == nil {
+            guard let pb = CMSampleBufferGetImageBuffer(sb) else { return }
+            let w = CVPixelBufferGetWidth(pb), h = CVPixelBufferGetHeight(pb)
+            try? FileManager.default.removeItem(at: url)
+            guard let wr = try? AVAssetWriter(outputURL: url, fileType: .mp4) else { return }
+            let settings: [String: Any] = [
+                AVVideoCodecKey: AVVideoCodecType.h264,
+                AVVideoWidthKey: w, AVVideoHeightKey: h,
+                AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: 700_000]]
+            let inp = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
+            inp.expectsMediaDataInRealTime = true
+            if wr.canAdd(inp) { wr.add(inp) }
+            wr.startWriting()
+            writer = wr; input = inp
+        }
+        let pts = CMSampleBufferGetPresentationTimeStamp(sb)
+        if !started { writer?.startSession(atSourceTime: pts); started = true }
+        if input?.isReadyForMoreMediaData == true { input?.append(sb) }
+    }
+
+    func stop(_ done: @escaping (URL?) -> Void) {
+        guard isRecording else { DispatchQueue.main.async { done(nil) }; return }
+        isRecording = false
+        let url = lastURL
+        input?.markAsFinished()
+        writer?.finishWriting { [weak self] in
+            self?.writer = nil; self?.input = nil; self?.started = false
+            DispatchQueue.main.async { done(url) }
+        }
     }
 }
