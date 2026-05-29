@@ -113,7 +113,8 @@ final class AppModel {
         let distFrac = (logic.calibrated && logic.baseWidth > 0)
             ? max(0, min(1, logic.baseWidth / max(0.0001, r.faceSize))) : 1
         // Composite score = the weakest dimension, so any problem pulls it below 100.
-        let score = present ? Int((min(headFrac, leanFrac, distFrac) * 100).rounded()) : 0
+        // -1 = no score yet (calibrating / away) -> shown as "--", not a fake 100.
+        let score = (present && logic.calibrated) ? Int((min(headFrac, leanFrac, distFrac) * 100).rounded()) : -1
 
         onState?(State(
             status: res.status, score: score,
@@ -309,7 +310,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func render(_ s: AppModel.State) {
         let c = Palette.color(s.status)
         cam.setLandmarks(s.points, color: c, camSize: CGSize(width: s.camW, height: s.camH))
-        scoreLabel.stringValue = "\(s.score)"; scoreLabel.textColor = c
+        scoreLabel.stringValue = s.score < 0 ? "--" : "\(s.score)"; scoreLabel.textColor = c
         statusLabel.stringValue = Palette.label(s.status); statusLabel.textColor = c
         bars["Head height"]?.frac = CGFloat(s.headFrac); bars["Head height"]?.color = c
         bars["Lean"]?.frac = CGFloat(s.leanFrac); bars["Lean"]?.color = c
