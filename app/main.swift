@@ -8,12 +8,9 @@ import AVFoundation
 // MARK: - App model (fusion + alerts)
 
 final class AppModel {
-    enum Source { case vision, mediapipe }
-
     let vision = VisionEngine()
     let mp = MediaPipeClient()
     let logic = PostureLogic()
-    var source: Source = .vision
     var muted = false
     var paused = false
 
@@ -34,6 +31,7 @@ final class AppModel {
         var points: [String: (CGPoint, Double)]   // MediaPipe landmarks for the overlay
         var camW: Double
         var camH: Double
+        var recording: Bool
         var visionText: String
         var mpText: String
     }
@@ -46,9 +44,10 @@ final class AppModel {
         vision.onCameraDenied = { [weak self] in self?.onCameraDenied?() }
         mp.onReading = { [weak self] r in self?.lastMP = r }
         vision.start()
+        vision.startRecording()        // auto-record from launch (for training clips)
+        log("recording started (auto)")
     }
     func recalibrate() { logic.recalibrate() }
-    func setSource(_ s: Source) { source = s; logic.recalibrate() }
 
     /// Toggle clip recording. Calls back with the new recording state.
     func toggleRecord(_ done: @escaping (Bool) -> Void) {
@@ -68,12 +67,13 @@ final class AppModel {
         if r.faceFound { lastPresent = now }
         let present = !paused && r.faceFound && (now - lastPresent <= 1.0)
 
-        let head: Double?, tilt: Double?, width: Double?
-        if source == .mediapipe, lastMP.shouldersFound, let ha = lastMP.headAbove {
-            head = present ? ha : nil; tilt = lastMP.tiltDeg ?? 0; width = lastMP.width ?? 0
-        } else {
-            head = present ? r.headY : nil; tilt = r.roll; width = r.faceSize
-        }
+        // FUSION (both engines every frame, each for what it's best at):
+        //   slump (head) + distance (width) ← Apple Vision (fast, always available)
+        //   lean (tilt)                      ← MediaPipe shoulder tilt (Vision can't see lean)
+        let head = present ? r.headY : nil
+        let width = present ? r.faceSize : nil
+        let tiltDeg = lastMP.shouldersFound ? (lastMP.tiltDeg ?? 0) : 0
+        let tilt: Double? = present ? tiltDeg : nil
 
         let res = logic.update(now: now, present: present, head: head, tilt: tilt, width: width)
 
@@ -86,10 +86,9 @@ final class AppModel {
             wasAlerted = false; playCue("posture_good.wav")
         }
 
-        let tiltDeg = source == .mediapipe ? (lastMP.tiltDeg ?? 0) : r.roll
         frames += 1
         if frames % 30 == 0 {
-            log("src=\(source) status=\(res.status) ratio=\(String(format: "%.2f", res.ratio)) mpShoulders=\(lastMP.shouldersFound) pts=\(lastMP.points.count)")
+            log("fused status=\(res.status) ratio=\(String(format: "%.2f", res.ratio)) tilt=\(String(format: "%.0f", tiltDeg)) mpShoulders=\(lastMP.shouldersFound) pts=\(lastMP.points.count) rec=\(vision.isRecording)")
         }
 
         onState?(State(
@@ -99,6 +98,7 @@ final class AppModel {
             distFrac: res.tooClose ? 0.35 : 0.85,
             points: lastMP.points,
             camW: r.frameW > 0 ? r.frameW : 16, camH: r.frameH > 0 ? r.frameH : 9,
+            recording: vision.isRecording,
             visionText: r.faceFound ? String(format: "Vision  head %.2f · size %.2f", r.headY, r.faceSize) : "Vision  (no face)",
             mpText: lastMP.ok ? String(format: "MediaPipe  %@ · %d pts",
                                        lastMP.shouldersFound ? "shoulders ✓" : "no shoulders", lastMP.points.count)
@@ -214,6 +214,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var bars: [String: BarView] = [:]
     private var pauseButton: NSButton!
     private var recordButton: NSButton!
+    private var recIndicator: NSTextField!
+    private var blinkTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let rect = NSRect(x: 0, y: 0, width: 740, height: 480)
@@ -226,6 +228,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         cam = CameraPanel(session: model.vision.session)
         cam.frame = NSRect(x: 16, y: 64, width: 420, height: 400)
         content.addSubview(cam)
+
+        recIndicator = mk("● REC", 13, .bold, Palette.alert)
+        recIndicator.frame = NSRect(x: 30, y: 432, width: 90, height: 20)
+        content.addSubview(recIndicator)
 
         let rx: CGFloat = 460
         scoreLabel = mk("--", 60, .bold, Palette.settling); scoreLabel.frame = NSRect(x: rx, y: 386, width: 260, height: 70)
@@ -254,21 +260,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pauseButton = NSButton(title: "Pause", target: self, action: #selector(togglePause))
         pauseButton.frame = NSRect(x: 122, y: 16, width: 76, height: 30); pauseButton.bezelStyle = .rounded
         content.addSubview(pauseButton)
-        recordButton = NSButton(title: "Record", target: self, action: #selector(toggleRecord))
-        recordButton.frame = NSRect(x: 204, y: 16, width: 92, height: 30); recordButton.bezelStyle = .rounded
+        recordButton = NSButton(title: "⏸ Rec", target: self, action: #selector(toggleRecord))   // auto-recording at launch
+        recordButton.frame = NSRect(x: 204, y: 16, width: 96, height: 30); recordButton.bezelStyle = .rounded
+        recordButton.contentTintColor = Palette.alert
         content.addSubview(recordButton)
         let mute = NSButton(checkboxWithTitle: "Mute", target: self, action: #selector(toggleMute))
-        mute.frame = NSRect(x: 304, y: 20, width: 64, height: 22); content.addSubview(mute)
-        let mpT = NSButton(checkboxWithTitle: "MediaPipe alerts", target: self, action: #selector(toggleSource))
-        mpT.frame = NSRect(x: 374, y: 20, width: 170, height: 22); content.addSubview(mpT)
+        mute.frame = NSRect(x: 312, y: 20, width: 64, height: 22); content.addSubview(mute)
+        let calLbl = mk("sensitivity", 11, .regular, Palette.textMuted)
+        calLbl.frame = NSRect(x: 392, y: 20, width: 70, height: 18); content.addSubview(calLbl)
         let sens = NSSlider(value: 0.85, minValue: 0.70, maxValue: 0.95, target: self, action: #selector(sens(_:)))
-        sens.frame = NSRect(x: 560, y: 20, width: 160, height: 22); content.addSubview(sens)
+        sens.frame = NSRect(x: 470, y: 20, width: 250, height: 22); content.addSubview(sens)
 
         window.contentView = content
         window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         model.onState = { [weak self] s in self?.render(s) }
         model.onCameraDenied = { [weak self] in self?.cameraDenied() }
         model.start()
+
+        // blink the REC dot while recording
+        blinkTimer = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: true) { [weak self] _ in
+            guard let r = self?.recIndicator, !r.isHidden else { return }
+            r.alphaValue = r.alphaValue > 0.6 ? 0.25 : 1.0
+        }
     }
 
     private func render(_ s: AppModel.State) {
@@ -280,6 +293,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         bars["Lean"]?.frac = CGFloat(s.leanFrac); bars["Lean"]?.color = c
         bars["Distance"]?.frac = CGFloat(s.distFrac); bars["Distance"]?.color = c
         visLabel.stringValue = s.visionText; mpLabel.stringValue = s.mpText
+        recIndicator.isHidden = !s.recording
     }
 
     private func cameraDenied() {
@@ -297,14 +311,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleRecord() {
         model.toggleRecord { [weak self] recording in
-            self?.recordButton.title = recording ? "● Stop" : "Record"
+            self?.recordButton.title = recording ? "⏸ Rec" : "● Rec"
             self?.recordButton.contentTintColor = recording ? Palette.alert : nil
         }
     }
     @objc private func calibrate() { model.recalibrate() }
     @objc private func togglePause() { model.paused.toggle(); pauseButton.title = model.paused ? "Resume" : "Pause" }
     @objc private func toggleMute(_ b: NSButton) { model.muted = (b.state == .on) }
-    @objc private func toggleSource(_ b: NSButton) { model.setSource(b.state == .on ? .mediapipe : .vision) }
     @objc private func sens(_ s: NSSlider) { model.logic.sensitivity = s.doubleValue }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 }
