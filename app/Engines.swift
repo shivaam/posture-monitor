@@ -234,6 +234,47 @@ final class MediaPipeClient {
     }
 }
 
+// MARK: - Placement client (ask the vision LLM if a camera is positioned well)
+
+struct PlacementResult { var ok = false; var position = ""; var guidance = "" }
+
+/// POSTs one frame to the server's /check_placement, which asks a vision LLM
+/// whether the camera is positioned right for posture (no hand-coded geometry).
+final class PlacementClient {
+    private let endpoint = URL(string: "http://localhost:8000/check_placement")!
+    private var inFlight = false
+
+    func check(_ jpeg: Data, view: String = "side", completion: @escaping (PlacementResult?) -> Void) {
+        guard !inFlight else { completion(nil); return }
+        inFlight = true
+        let boundary = "B\(Int(Date().timeIntervalSince1970 * 1000))"
+        var req = URLRequest(url: endpoint)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 30      // vision LLM latency
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        var body = Data()
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"view\"\r\n\r\n".data(using: .utf8)!)
+        body.append("\(view)\r\n".data(using: .utf8)!)
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"f.jpg\"\r\n".data(using: .utf8)!)
+        body.append("Content-Type: image/jpeg\r\n\r\n".data(using: .utf8)!)
+        body.append(jpeg)
+        body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+        req.httpBody = body
+        URLSession.shared.dataTask(with: req) { data, _, _ in
+            defer { self.inFlight = false }
+            var res = PlacementResult()
+            if let data, let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                res.ok = obj["ok"] as? Bool ?? false
+                res.position = obj["position"] as? String ?? ""
+                res.guidance = obj["guidance"] as? String ?? ""
+            }
+            DispatchQueue.main.async { completion(res.guidance.isEmpty ? nil : res) }
+        }.resume()
+    }
+}
+
 // MARK: - Clip recorder (low-bitrate camera clips for training + offline analysis)
 
 final class ClipRecorder {

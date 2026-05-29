@@ -16,19 +16,33 @@ final class SideCamera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     private var lastSent = 0.0
     private var lastSize = (w: 16.0, h: 9.0)
     private(set) var available = false
+    private(set) var deviceName: String?
+    private(set) var lastJPEG: Data?      // most recent frame, for the LLM placement check
+    private let device: AVCaptureDevice?
+    private var gotFirstReading = false
 
     // points + camera size (for the overlay), plus the derived forward-head angle.
     var onFrame: ((_ points: [String: (CGPoint, Double)], _ camW: Double, _ camH: Double,
                    _ forwardHeadDeg: Double?, _ present: Bool) -> Void)?
 
-    func start() {
-        // Prefer a non-built-in camera (the built-in FaceTime cam is the front view).
+    // Discover the side device EAGERLY (at construction) so `available`/`deviceName`
+    // are known before the UI decides whether to wire a panel. Prefer a non-built-in
+    // camera — the built-in FaceTime cam is the front view; a USB webcam or iPhone
+    // Continuity Camera shows up as .external/.continuityCamera.
+    override init() {
         let ds = AVCaptureDevice.DiscoverySession(
             deviceTypes: [.external, .continuityCamera, .builtInWideAngleCamera],
             mediaType: .video, position: .unspecified)
         let dev = ds.devices.first(where: { $0.deviceType == .external || $0.deviceType == .continuityCamera })
-        guard let dev else { available = false; return }
-        available = true
+        device = dev
+        super.init()
+        plog("side: discovery saw [\(ds.devices.map { "\($0.localizedName)(\($0.deviceType.rawValue))" }.joined(separator: ", "))]")
+        available = (dev != nil)
+        deviceName = dev?.localizedName
+    }
+
+    func start() {
+        guard let dev = device else { return }
         mp.onReading = { [weak self] r in self?.handle(r) }
         queue.async {
             self.session.beginConfiguration(); self.session.sessionPreset = .high
@@ -52,11 +66,13 @@ final class SideCamera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
         let scaled = ci.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
         guard let cg = ciContext.createCGImage(scaled, from: scaled.extent) else { return }
         if let d = NSBitmapImageRep(cgImage: cg).representation(using: .jpeg, properties: [.compressionFactor: 0.5]) {
+            lastJPEG = d
             mp.send(d)
         }
     }
 
     private func handle(_ r: MPReading) {
+        if !gotFirstReading { gotFirstReading = true; plog("side: first MediaPipe reading ok=\(r.ok) shoulders=\(r.shouldersFound) pts=\(r.points.count)") }
         func vp(_ k: String) -> (CGPoint, Double)? { let v = r.points[k]; return (v != nil && v!.1 > 0.3) ? v! : nil }
         // Use whichever side faces the camera (higher-visibility ear+shoulder pair).
         let pairs = [("leftEar", "leftShoulder"), ("rightEar", "rightShoulder")]

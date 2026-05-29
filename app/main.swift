@@ -5,6 +5,16 @@
 import AppKit
 import AVFoundation
 
+// Shared logger — both AppModel and the side-camera path write to one file so
+// the whole pipeline (front fusion + side cam) is visible in one timeline.
+let posLogURL = URL(fileURLWithPath: "/tmp/posture-monitor.log")
+func plog(_ s: String) {
+    let line = "[\(ISO8601DateFormatter().string(from: Date()))] \(s)\n"
+    guard let d = line.data(using: .utf8) else { return }
+    if let fh = try? FileHandle(forWritingTo: posLogURL) { fh.seekToEndOfFile(); fh.write(d); try? fh.close() }
+    else { try? d.write(to: posLogURL) }
+}
+
 // MARK: - App model (fusion + alerts)
 
 final class AppModel {
@@ -14,7 +24,11 @@ final class AppModel {
     let config = Config.load()
     var muted = false
     var paused = false
+    var sideActive = false         // a side camera is wired (shows the Shoulders bar)
     var sideForwardFrac = 1.0      // 1 = no side cam / good; drops with forward-head
+    private var emaSideDeg = 0.0   // smoothed side forward-head angle (raw is jittery)
+    private var sideBaseDeg: Double?   // neutral angle captured at calibration
+    private var sideSeen = false
 
     private var lastVision = VisionReading()
     private var lastMP = MPReading()
@@ -24,7 +38,6 @@ final class AppModel {
     private var emaTilt = 0.0          // smoothed shoulder tilt for the (jittery) lean bar
     private var frames = 0
     private let cueDir = Bundle.main.resourcePath ?? "cues"
-    private let logURL = URL(fileURLWithPath: "/tmp/posture-monitor.log")
 
     struct State {
         var status: PostureLogic.Status
@@ -32,6 +45,8 @@ final class AppModel {
         var headFrac: Double
         var leanFrac: Double
         var distFrac: Double
+        var shoulderFrac: Double = 1               // side-cam forward-head (1 = at neutral)
+        var sideActive: Bool = false               // show the Shoulders bar?
         var points: [String: (CGPoint, Double)]   // MediaPipe landmarks for the overlay
         var camW: Double
         var camH: Double
@@ -97,12 +112,15 @@ final class AppModel {
         }
 
         // Record the calibration baseline into the clip's sidecar — so a recorded
-        // clip knows "where the user started" for later analysis/training.
+        // clip knows "where the user started" for later analysis/training. Capture
+        // the side-cam neutral angle at the same moment so it's baseline-relative too.
         if logic.calibrated && !wasCalibrated {
+            if sideSeen { sideBaseDeg = emaSideDeg }
             vision.recorder.event(["type": "calibrate",
                                    "baseHead": logic.baseHead ?? 0,
                                    "baseTilt": logic.baseTilt,
-                                   "baseWidth": logic.baseWidth])
+                                   "baseWidth": logic.baseWidth,
+                                   "baseSideDeg": sideBaseDeg ?? -1])
         }
         wasCalibrated = logic.calibrated
 
@@ -130,6 +148,7 @@ final class AppModel {
         onState?(State(
             status: res.status, score: score,
             headFrac: headFrac, leanFrac: leanFrac, distFrac: distFrac,
+            shoulderFrac: sideForwardFrac, sideActive: sideActive,
             points: lastMP.points,
             camW: r.frameW > 0 ? r.frameW : 16, camH: r.frameH > 0 ? r.frameH : 9,
             recording: vision.isRecording,
@@ -139,17 +158,25 @@ final class AppModel {
                               : "MediaPipe  (server off?)"))
     }
 
+    // Side-camera forward-head -> a 0..1 score fraction, smoothed + baseline-relative
+    // (mirrors the front metrics). Until calibrated, the current angle is treated as
+    // neutral so it never falsely penalizes; once calibrated we score the deviation.
+    // not-present -> the penalty eases back toward 1.
+    func feedSide(deg: Double?, present: Bool) -> Double {
+        guard present, let deg else { sideForwardFrac = sideForwardFrac * 0.9 + 0.1; return sideForwardFrac }
+        if !sideSeen { emaSideDeg = deg; sideSeen = true }
+        emaSideDeg = emaSideDeg * 0.8 + deg * 0.2          // smooth the jittery raw angle
+        let dev = max(0, emaSideDeg - (sideBaseDeg ?? emaSideDeg))   // ° of forward-head beyond neutral
+        sideForwardFrac = max(0, min(1, 1 - dev / 20))     // full at neutral, empty ~20° beyond
+        return sideForwardFrac
+    }
+
     private func playCue(_ name: String) { if !muted { run("/usr/bin/afplay", [cueDir + "/" + name]) } }
     private func notify(_ msg: String) { run("/usr/bin/osascript", ["-e", "display notification \"\(msg)\" with title \"Posture\""]) }
     private func run(_ path: String, _ args: [String]) {
         let p = Process(); p.executableURL = URL(fileURLWithPath: path); p.arguments = args; try? p.run()
     }
-    private func log(_ s: String) {
-        let line = "[\(ISO8601DateFormatter().string(from: Date()))] \(s)\n"
-        guard let d = line.data(using: .utf8) else { return }
-        if let fh = try? FileHandle(forWritingTo: logURL) { fh.seekToEndOfFile(); fh.write(d); try? fh.close() }
-        else { try? d.write(to: logURL) }
-    }
+    private func log(_ s: String) { plog(s) }
 }
 
 // MARK: - Camera + MediaPipe skeleton overlay
@@ -253,6 +280,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var sideCam: SideCamera?
     private var sidePanel: CameraPanel?
     private var sideLabel: NSTextField!
+    private var sideHint: NSTextField!
+    private let placement = PlacementClient()
     private var statusColor = Palette.settling
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -272,21 +301,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sideLabel = mk("", 12, .regular, NSColor(srgbRed: 0.36, green: 0.86, blue: 1, alpha: 1))
         sideLabel.frame = NSRect(x: 460, y: 78, width: 270, height: 16)
         content.addSubview(sideLabel)
+        sideHint = mk("", 11, .regular, Palette.warn)        // LLM camera-placement guidance
+        sideHint.frame = NSRect(x: 460, y: 56, width: 270, height: 18)
+        sideHint.maximumNumberOfLines = 2; sideHint.lineBreakMode = .byWordWrapping
+        content.addSubview(sideHint)
 
         if model.config.sideCamera {
             let sc = SideCamera(); sideCam = sc
+            plog("side: enabled; device=\(sc.deviceName ?? "none") available=\(sc.available)")
             if sc.available {
+                model.sideActive = true
                 let sp = CameraPanel(session: sc.session); sidePanel = sp
                 content.addSubview(sp); panels.append(sp)
+                var sideLast = 0.0
                 sc.onFrame = { [weak self] pts, w, h, deg, present in
                     guard let self else { return }
                     self.sidePanel?.setLandmarks(pts, color: self.statusColor, camSize: CGSize(width: w, height: h))
+                    let frac = self.model.feedSide(deg: deg, present: present)   // smoothed + baseline-relative
                     self.sideLabel.stringValue = present ? String(format: "Side  forward-head %.0f°", deg ?? 0) : "Side  (no person)"
-                    self.model.sideForwardFrac = max(0, min(1, 1 - max(0, (deg ?? 0) - 12) / 20))   // full <12°, empty ~32°
+                    let now = ProcessInfo.processInfo.systemUptime
+                    if now - sideLast > 3 {   // ~every 3s, don't flood
+                        sideLast = now
+                        plog(String(format: "side: present=%@ deg=%.0f frac=%.2f pts=%d",
+                                    present ? "true" : "false", deg ?? -1, frac, pts.count))
+                    }
                 }
             }
             sc.start()
             sideLabel.stringValue = sc.available ? "Side  starting…" : "Side  connect a 2nd camera / iPhone"
+            // Once it has a frame, ask the vision LLM whether the side camera is
+            // well placed (you can re-check anytime by pressing Calibrate).
+            if sc.available {
+                sideHint.stringValue = "Checking side camera placement…"
+                Timer.scheduledTimer(withTimeInterval: 5, repeats: false) { [weak self] _ in self?.checkSidePlacement() }
+            }
         }
 
         // lay the active panels across the camera region (no per-camera branching)
@@ -307,13 +355,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusLabel = mk("Calibrating…", 19, .semibold, Palette.settling); statusLabel.frame = NSRect(x: rx, y: 352, width: 260, height: 28)
         content.addSubview(statusLabel)
 
+        // The side camera adds a "Shoulders" dimension (forward-head / rounded
+        // shoulders) — the axis a front camera can't see.
         var y: CGFloat = 300
-        for name in ["Head height", "Lean", "Distance"] {
+        let dims = ["Head height", "Lean", "Distance"] + (model.sideActive ? ["Shoulders"] : [])
+        for name in dims {
             let l = mk(name, 12, .regular, Palette.textMuted); l.frame = NSRect(x: rx, y: y, width: 260, height: 16)
             content.addSubview(l)
             let bar = BarView(frame: NSRect(x: rx, y: y - 16, width: 250, height: 10))
             content.addSubview(bar); bars[name] = bar
-            y -= 50
+            y -= 45
         }
 
         visLabel = mk("Vision …", 11, .regular, Palette.textMuted); visLabel.frame = NSRect(x: rx, y: 120, width: 270, height: 16)
@@ -361,6 +412,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         bars["Head height"]?.frac = CGFloat(s.headFrac); bars["Head height"]?.color = c
         bars["Lean"]?.frac = CGFloat(s.leanFrac); bars["Lean"]?.color = c
         bars["Distance"]?.frac = CGFloat(s.distFrac); bars["Distance"]?.color = c
+        bars["Shoulders"]?.frac = CGFloat(s.shoulderFrac); bars["Shoulders"]?.color = c
         visLabel.stringValue = s.visionText; mpLabel.stringValue = s.mpText
         recIndicator.isHidden = !s.recording
     }
@@ -384,7 +436,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.recordButton.contentTintColor = recording ? Palette.alert : nil
         }
     }
-    @objc private func calibrate() { model.recalibrate() }
+    @objc private func calibrate() { model.recalibrate(); checkSidePlacement() }
+
+    // Ask the vision LLM whether the side camera is positioned well, show its
+    // guidance. Cheap to call (one frame) and bounded — only on launch + Calibrate.
+    private func checkSidePlacement() {
+        guard model.sideActive, let jpeg = sideCam?.lastJPEG else { return }
+        sideHint.stringValue = "Checking side camera placement…"; sideHint.textColor = Palette.textMuted
+        placement.check(jpeg, view: "side") { [weak self] res in
+            guard let self else { return }
+            guard let res else { sideHint.stringValue = "Side  placement check unavailable"; return }
+            sideHint.stringValue = (res.ok ? "✓ " : "⚠︎ ") + res.guidance
+            sideHint.textColor = res.ok ? Palette.good : Palette.warn
+            plog("side: placement ok=\(res.ok) pos=\(res.position) — \(res.guidance)")
+        }
+    }
     @objc private func togglePause() { model.paused.toggle(); pauseButton.title = model.paused ? "Resume" : "Pause" }
     @objc private func toggleMute(_ b: NSButton) { model.muted = (b.state == .on) }
     @objc private func sens(_ s: NSSlider) { model.logic.sensitivity = s.doubleValue }
