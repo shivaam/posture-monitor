@@ -14,6 +14,7 @@ final class AppModel {
     let config = Config.load()
     var muted = false
     var paused = false
+    var sideForwardFrac = 1.0      // 1 = no side cam / good; drops with forward-head
 
     private var lastVision = VisionReading()
     private var lastMP = MPReading()
@@ -120,9 +121,11 @@ final class AppModel {
         let leanFrac = logic.calibrated ? max(0, 1 - abs(emaTilt - logic.baseTilt) / logic.tiltThresh) : 1
         let distFrac = (logic.calibrated && logic.baseWidth > 0)
             ? max(0, min(1, logic.baseWidth / max(0.0001, r.faceSize))) : 1
-        // Composite score = the weakest dimension, so any problem pulls it below 100.
+        // Composite score = the weakest dimension (incl. side-cam forward-head when
+        // present; sideForwardFrac is 1 with no side cam, so it's a no-op then).
         // -1 = no score yet (calibrating / away) -> shown as "--", not a fake 100.
-        let score = (present && logic.calibrated) ? Int((min(headFrac, leanFrac, distFrac) * 100).rounded()) : -1
+        let score = (present && logic.calibrated)
+            ? Int((min(headFrac, leanFrac, distFrac, sideForwardFrac) * 100).rounded()) : -1
 
         onState?(State(
             status: res.status, score: score,
@@ -248,7 +251,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var recIndicator: NSTextField!
     private var blinkTimer: Timer?
     private var sideCam: SideCamera?
+    private var sidePanel: CameraPanel?
     private var sideLabel: NSTextField!
+    private var statusColor = Palette.settling
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let rect = NSRect(x: 0, y: 0, width: 740, height: 480)
@@ -258,9 +263,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let content = NSView(frame: rect); content.wantsLayer = true
         content.layer?.backgroundColor = Palette.bg.cgColor
 
+        // Cameras as FEEDS — front always; side when enabled & available. Layout and
+        // rendering iterate this list, so switching 1<->2 cameras is data, not branches.
         cam = CameraPanel(session: model.vision.session)
-        cam.frame = NSRect(x: 16, y: 64, width: 420, height: 400)
         content.addSubview(cam)
+        var panels: [CameraPanel] = [cam]
+
+        sideLabel = mk("", 12, .regular, NSColor(srgbRed: 0.36, green: 0.86, blue: 1, alpha: 1))
+        sideLabel.frame = NSRect(x: 460, y: 78, width: 270, height: 16)
+        content.addSubview(sideLabel)
+
+        if model.config.sideCamera {
+            let sc = SideCamera(); sideCam = sc
+            if sc.available {
+                let sp = CameraPanel(session: sc.session); sidePanel = sp
+                content.addSubview(sp); panels.append(sp)
+                sc.onFrame = { [weak self] pts, w, h, deg, present in
+                    guard let self else { return }
+                    self.sidePanel?.setLandmarks(pts, color: self.statusColor, camSize: CGSize(width: w, height: h))
+                    self.sideLabel.stringValue = present ? String(format: "Side  forward-head %.0f°", deg ?? 0) : "Side  (no person)"
+                    self.model.sideForwardFrac = max(0, min(1, 1 - max(0, (deg ?? 0) - 12) / 20))   // full <12°, empty ~32°
+                }
+            }
+            sc.start()
+            sideLabel.stringValue = sc.available ? "Side  starting…" : "Side  connect a 2nd camera / iPhone"
+        }
+
+        // lay the active panels across the camera region (no per-camera branching)
+        let region = NSRect(x: 16, y: 64, width: 420, height: 400)
+        let gap: CGFloat = 8
+        let pw = (region.width - gap * CGFloat(panels.count - 1)) / CGFloat(panels.count)
+        for (i, p) in panels.enumerated() {
+            p.frame = NSRect(x: region.minX + CGFloat(i) * (pw + gap), y: region.minY, width: pw, height: region.height)
+        }
 
         recIndicator = mk("● REC", 13, .bold, Palette.alert)
         recIndicator.frame = NSRect(x: 30, y: 432, width: 90, height: 20)
@@ -311,22 +346,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.onCameraDenied = { [weak self] in self?.cameraDenied() }
         model.start()
 
-        // EXPERIMENTAL side camera (gated). Default off -> stable app untouched.
-        sideLabel = mk("", 12, .regular, NSColor(srgbRed: 0.36, green: 0.86, blue: 1, alpha: 1))
-        sideLabel.frame = NSRect(x: 460, y: 78, width: 270, height: 16)
-        content.addSubview(sideLabel)
-        if model.config.sideCamera {
-            let sc = SideCamera()
-            sc.onSide = { [weak self] deg, present in
-                self?.sideLabel.stringValue = present
-                    ? String(format: "Side  forward-head %.0f°", deg ?? 0)
-                    : "Side  (no person)"
-            }
-            sc.start()
-            sideLabel.stringValue = sc.available ? "Side  starting…" : "Side  connect a 2nd camera / iPhone"
-            sideCam = sc
-        }
-
         // blink the REC dot while recording
         blinkTimer = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: true) { [weak self] _ in
             guard let r = self?.recIndicator, !r.isHidden else { return }
@@ -335,7 +354,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func render(_ s: AppModel.State) {
-        let c = Palette.color(s.status)
+        let c = Palette.color(s.status); statusColor = c
         cam.setLandmarks(s.points, color: c, camSize: CGSize(width: s.camW, height: s.camH))
         scoreLabel.stringValue = s.score < 0 ? "--" : "\(s.score)"; scoreLabel.textColor = c
         statusLabel.stringValue = Palette.label(s.status); statusLabel.textColor = c

@@ -14,9 +14,12 @@ final class SideCamera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     private let mp = MediaPipeClient()
     private let ciContext = CIContext()
     private var lastSent = 0.0
+    private var lastSize = (w: 16.0, h: 9.0)
     private(set) var available = false
 
-    var onSide: ((_ forwardHeadDeg: Double?, _ present: Bool) -> Void)?
+    // points + camera size (for the overlay), plus the derived forward-head angle.
+    var onFrame: ((_ points: [String: (CGPoint, Double)], _ camW: Double, _ camH: Double,
+                   _ forwardHeadDeg: Double?, _ present: Bool) -> Void)?
 
     func start() {
         // Prefer a non-built-in camera (the built-in FaceTime cam is the front view).
@@ -43,6 +46,7 @@ final class SideCamera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
         if now - lastSent < 0.3 { return }      // ~3 fps to the server
         lastSent = now
         guard let pb = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        lastSize = (Double(CVPixelBufferGetWidth(pb)), Double(CVPixelBufferGetHeight(pb)))
         let ci = CIImage(cvPixelBuffer: pb)
         let scale = min(1, 320 / max(ci.extent.width, ci.extent.height))
         let scaled = ci.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
@@ -60,13 +64,14 @@ final class SideCamera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
                 guard let ev = vp(e), let sv = vp(s) else { return nil }
                 return (ev.0, sv.0, min(ev.1, sv.1))
             }
+        let pts = r.points, sz = lastSize
         guard let best = pairs.max(by: { $0.2 < $1.2 }) else {
-            DispatchQueue.main.async { self.onSide?(nil, false) }; return
+            DispatchQueue.main.async { self.onFrame?(pts, sz.w, sz.h, nil, false) }; return
         }
         let (ear, sh, _) = best
         let dx = abs(ear.x - sh.x)            // ear ahead of shoulder (forward head)
         let dy = max(0.0001, abs(sh.y - ear.y))
         let deg = atan2(dx, dy) * 180 / .pi   // 0 = ear straight above shoulder; grows as head juts forward
-        DispatchQueue.main.async { self.onSide?(Double(deg), true) }
+        DispatchQueue.main.async { self.onFrame?(pts, sz.w, sz.h, Double(deg), true) }
     }
 }
