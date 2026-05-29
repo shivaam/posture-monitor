@@ -6,6 +6,11 @@ import AVFoundation
 import Vision
 import CoreImage
 
+// The PostureMonitor server runs on its OWN port (not :8000) so it never collides
+// with the StretchLab launchd server. Override with the POSTURE_SERVER env var.
+let postureServerBase: String = ProcessInfo.processInfo.environment["POSTURE_SERVER"]
+    ?? "http://127.0.0.1:8077"
+
 // MARK: - Readings
 
 struct VisionReading {
@@ -104,7 +109,8 @@ final class VisionEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
     private let faceRequest = VNDetectFaceLandmarksRequest()
     private let ciContext = CIContext()
     private var lastProc = 0.0
-    private var lastJPEG = 0.0
+    private var lastJPEGTime = 0.0
+    private(set) var lastJPEG: Data?      // most recent front frame, for the LLM setup diagnosis
     let recorder = ClipRecorder()
 
     var onVision: ((VisionReading) -> Void)?       // ~8 fps, main thread
@@ -143,8 +149,9 @@ final class VisionEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         let now = ProcessInfo.processInfo.systemUptime
         // Forward a downsized JPEG to MediaPipe as fast as it keeps up (~5 fps;
         // requests drop while one is in flight) for smoother live pointers.
-        if now - lastJPEG > 0.18, let data = jpeg(from: sampleBuffer, maxDim: 320) {
-            lastJPEG = now
+        if now - lastJPEGTime > 0.18, let data = jpeg(from: sampleBuffer, maxDim: 320) {
+            lastJPEGTime = now
+            lastJPEG = data
             DispatchQueue.main.async { self.onFrameJPEG?(data) }
         }
         // Vision face at ~8 fps.
@@ -181,7 +188,7 @@ final class VisionEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
 final class MediaPipeClient {
     var onReading: ((MPReading) -> Void)?
     private var inFlight = false
-    private let endpoint = URL(string: "http://localhost:8000/posture")!
+    private let endpoint = URL(string: "\(postureServerBase)/posture")!
     private let token: String?
 
     init() {
@@ -238,11 +245,56 @@ final class MediaPipeClient {
 
 struct PlacementResult { var ok = false; var position = ""; var guidance = "" }
 
-/// POSTs one frame to the server's /check_placement, which asks a vision LLM
-/// whether the camera is positioned right for posture (no hand-coded geometry).
+/// Two-camera setup diagnosis from the vision LLM (reasons across both views).
+struct SetupAssessment {
+    var frontOK = false, sideOK = false, hasSide = false
+    var posture = "", problem = "", fix = "", explanation = ""
+}
+
+/// POSTs frames to the server, which asks a vision LLM about camera placement /
+/// the whole setup (no hand-coded geometry — the LLM reasons about the images).
 final class PlacementClient {
-    private let endpoint = URL(string: "http://localhost:8000/check_placement")!
+    private let endpoint = URL(string: "\(postureServerBase)/check_placement")!
+    private let assessEndpoint = URL(string: "\(postureServerBase)/assess_setup")!
     private var inFlight = false
+    private var assessInFlight = false
+
+    /// Multipart helper: append one file part to `body`.
+    private func appendFile(_ body: inout Data, boundary: String, name: String, _ jpeg: Data) {
+        body.append("--\(boundary)\r\n".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"\(name)\"; filename=\"\(name).jpg\"\r\n".data(using: .utf8)!)
+        body.append("Content-Type: image/jpeg\r\n\r\n".data(using: .utf8)!)
+        body.append(jpeg)
+        body.append("\r\n".data(using: .utf8)!)
+    }
+
+    /// Send front (+ optional side) frames; the LLM diagnoses the whole setup.
+    func assess(front: Data, side: Data?, completion: @escaping (SetupAssessment?) -> Void) {
+        guard !assessInFlight else { completion(nil); return }
+        assessInFlight = true
+        let boundary = "B\(Int(Date().timeIntervalSince1970 * 1000))"
+        var req = URLRequest(url: assessEndpoint); req.httpMethod = "POST"; req.timeoutInterval = 40
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        var body = Data()
+        appendFile(&body, boundary: boundary, name: "front", front)
+        if let side { appendFile(&body, boundary: boundary, name: "side", side) }
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+        req.httpBody = body
+        URLSession.shared.dataTask(with: req) { data, _, _ in
+            defer { self.assessInFlight = false }
+            var a = SetupAssessment()
+            if let data, let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                a.frontOK = o["front_ok"] as? Bool ?? false
+                a.sideOK = o["side_ok"] as? Bool ?? false
+                a.hasSide = o["has_side"] as? Bool ?? (side != nil)
+                a.posture = o["posture"] as? String ?? ""
+                a.problem = o["problem"] as? String ?? ""
+                a.fix = o["fix"] as? String ?? ""
+                a.explanation = o["explanation"] as? String ?? ""
+            }
+            DispatchQueue.main.async { completion(a.explanation.isEmpty ? nil : a) }
+        }.resume()
+    }
 
     func check(_ jpeg: Data, view: String = "side", completion: @escaping (PlacementResult?) -> Void) {
         guard !inFlight else { completion(nil); return }

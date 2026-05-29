@@ -36,3 +36,15 @@ async def check_placement(file: UploadFile = File(...), view: str = Form("side")
         return placement.check(data, view)
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.post("/assess_setup")
+async def assess_setup(front: UploadFile = File(...), side: UploadFile = File(None)):
+    """Two-camera setup diagnosis: the vision LLM looks at the front (+ optional
+    side) frame and explains why the setup works / what's wrong right now."""
+    fb = await front.read()
+    sb = await side.read() if side is not None else None
+    try:
+        return placement.assess(fb, sb)
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})

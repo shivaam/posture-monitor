@@ -329,13 +329,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             sc.start()
             sideLabel.stringValue = sc.available ? "Side  starting…" : "Side  connect a 2nd camera / iPhone"
-            // Once it has a frame, ask the vision LLM whether the side camera is
-            // well placed (you can re-check anytime by pressing Calibrate).
-            if sc.available {
-                sideHint.stringValue = "Checking side camera placement…"
-                Timer.scheduledTimer(withTimeInterval: 5, repeats: false) { [weak self] _ in self?.checkSidePlacement() }
-            }
         }
+
+        // Once cameras have a frame, let the vision LLM diagnose the setup (works
+        // front-only too; re-run anytime via Calibrate or the 🔍 Diagnose button).
+        Timer.scheduledTimer(withTimeInterval: 6, repeats: false) { [weak self] _ in self?.diagnoseSetup(showModal: false) }
 
         // lay the active panels across the camera region (no per-camera branching)
         let region = NSRect(x: 16, y: 64, width: 420, height: 400)
@@ -389,7 +387,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let calLbl = mk("sensitivity", 11, .regular, Palette.textMuted)
         calLbl.frame = NSRect(x: 392, y: 20, width: 70, height: 18); content.addSubview(calLbl)
         let sens = NSSlider(value: model.config.sensitivity, minValue: 0.70, maxValue: 0.95, target: self, action: #selector(sens(_:)))
-        sens.frame = NSRect(x: 470, y: 20, width: 250, height: 22); content.addSubview(sens)
+        sens.frame = NSRect(x: 464, y: 20, width: 150, height: 22); content.addSubview(sens)
+        // Vision-LLM setup diagnosis — looks at front (+ side) and explains the setup.
+        let diag = NSButton(title: "🔍 Diagnose", target: self, action: #selector(diagnose))
+        diag.frame = NSRect(x: 624, y: 16, width: 108, height: 30); diag.bezelStyle = .rounded
+        content.addSubview(diag)
 
         window.contentView = content
         window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
@@ -436,19 +438,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.recordButton.contentTintColor = recording ? Palette.alert : nil
         }
     }
-    @objc private func calibrate() { model.recalibrate(); checkSidePlacement() }
+    @objc private func calibrate() { model.recalibrate(); diagnoseSetup(showModal: false) }
+    @objc private func diagnose() { diagnoseSetup(showModal: true) }
 
-    // Ask the vision LLM whether the side camera is positioned well, show its
-    // guidance. Cheap to call (one frame) and bounded — only on launch + Calibrate.
-    private func checkSidePlacement() {
-        guard model.sideActive, let jpeg = sideCam?.lastJPEG else { return }
-        sideHint.stringValue = "Checking side camera placement…"; sideHint.textColor = Palette.textMuted
-        placement.check(jpeg, view: "side") { [weak self] res in
+    // Vision-LLM setup diagnosis: send the front (+ side) frame and let the LLM
+    // reason about the whole setup — why it works, what's wrong right now, the one
+    // fix. showModal=true (the Diagnose button) shows the full explanation; the
+    // auto/Calibrate path just updates the short hint. Frames + verdict are saved
+    // for later use. Bounded calls (launch + Calibrate + button), not per-frame.
+    private func diagnoseSetup(showModal: Bool) {
+        guard let front = model.vision.lastJPEG else {
+            if showModal { simpleAlert("No camera frame yet", "Grant camera access and wait a moment, then try again.") }
+            return
+        }
+        let side = sideCam?.lastJPEG
+        sideHint.stringValue = "Diagnosing setup with vision AI…"; sideHint.textColor = Palette.textMuted
+        placement.assess(front: front, side: side) { [weak self] a in
             guard let self else { return }
-            guard let res else { sideHint.stringValue = "Side  placement check unavailable"; return }
-            sideHint.stringValue = (res.ok ? "✓ " : "⚠︎ ") + res.guidance
-            sideHint.textColor = res.ok ? Palette.good : Palette.warn
-            plog("side: placement ok=\(res.ok) pos=\(res.position) — \(res.guidance)")
+            guard let a else {
+                sideHint.stringValue = "Setup diagnosis unavailable (server?)"
+                if showModal { self.simpleAlert("Diagnosis unavailable", "The vision server didn't respond. Is it running on :8000?") }
+                return
+            }
+            let short = a.fix.isEmpty ? a.problem : a.fix
+            sideHint.stringValue = (a.sideOK || (!a.hasSide && a.frontOK) ? "✓ " : "⚠︎ ") + short
+            sideHint.textColor = (a.frontOK && (a.sideOK || !a.hasSide)) ? Palette.good : Palette.warn
+            plog("diagnose: front_ok=\(a.frontOK) side_ok=\(a.sideOK) posture=\(a.posture) problem=\(a.problem) fix=\(a.fix)")
+            self.saveDiagnosis(front: front, side: side, a: a)
+            if showModal {
+                let cams = "Front: \(a.frontOK ? "✓ usable" : "⚠︎ issue")   Side: \(a.hasSide ? (a.sideOK ? "✓ usable" : "⚠︎ issue") : "— none")"
+                let body = "\(a.explanation)\n\n\(cams)\nPosture now: \(a.posture)" + (a.fix.isEmpty ? "" : "\n\nFix: \(a.fix)")
+                self.simpleAlert("Camera setup diagnosis", body)
+            }
+        }
+    }
+
+    private func simpleAlert(_ title: String, _ body: String) {
+        let al = NSAlert(); al.messageText = title; al.informativeText = body
+        al.addButton(withTitle: "OK"); al.runModal()
+    }
+
+    // Save the front/side frames + the LLM verdict for later review / tuning.
+    private func saveDiagnosis(front: Data, side: Data?, a: SetupAssessment) {
+        let base = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Movies/PostureMonitor/setups")
+        let f = DateFormatter(); f.dateFormat = "yyyyMMdd-HHmmss"
+        let dir = base.appendingPathComponent("setup_\(f.string(from: Date()))")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? front.write(to: dir.appendingPathComponent("front.jpg"))
+        if let side { try? side.write(to: dir.appendingPathComponent("side.jpg")) }
+        let verdict: [String: Any] = ["front_ok": a.frontOK, "side_ok": a.sideOK, "has_side": a.hasSide,
+                                      "posture": a.posture, "problem": a.problem, "fix": a.fix, "explanation": a.explanation]
+        if let d = try? JSONSerialization.data(withJSONObject: verdict, options: .prettyPrinted) {
+            try? d.write(to: dir.appendingPathComponent("assessment.json"))
         }
     }
     @objc private func togglePause() { model.paused.toggle(); pauseButton.title = model.paused ? "Resume" : "Pause" }

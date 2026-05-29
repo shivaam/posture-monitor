@@ -53,22 +53,72 @@ FRONT_PROMPT = (
 )
 
 
-def check(image_bytes, view="side"):
-    prompt = SIDE_PROMPT if view == "side" else FRONT_PROMPT
-    b = base64.b64encode(image_bytes).decode()
-    msg = client().messages.create(
-        model=MODEL, max_tokens=160,
-        messages=[{"role": "user", "content": [
-            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b}},
-            {"type": "text", "text": prompt}]}])
-    txt = msg.content[0].text if msg.content else ""
+def _img(b):
+    return {"type": "image", "source": {
+        "type": "base64", "media_type": "image/jpeg", "data": base64.b64encode(b).decode()}}
+
+
+def _json(txt):
     m = re.search(r"\{.*\}", txt, re.S)
     try:
-        d = json.loads(m.group(0)) if m else {}
+        return json.loads(m.group(0)) if m else {}
     except Exception:
-        d = {}
+        return {}
+
+
+def check(image_bytes, view="side"):
+    prompt = SIDE_PROMPT if view == "side" else FRONT_PROMPT
+    msg = client().messages.create(
+        model=MODEL, max_tokens=160,
+        messages=[{"role": "user", "content": [_img(image_bytes), {"type": "text", "text": prompt}]}])
+    txt = msg.content[0].text if msg.content else ""
+    d = _json(txt)
     return {
         "ok": bool(d.get("ok", False)),
         "position": d.get("position", "unknown"),
         "guidance": d.get("guidance") or (txt[:80] if txt else "no response"),
+    }
+
+
+ASSESS_PROMPT = (
+    "You are an expert helping a person set up a desk-posture monitor that uses "
+    "TWO cameras. Image 1 is the FRONT camera (should be ~eye level and show the "
+    "face and both shoulders). Image 2, if present, is the SIDE camera (should "
+    "show the PROFILE — ear and shoulder visible side-on — so forward-head and "
+    "rounded shoulders can be measured; a front camera physically cannot see those). "
+    "Look at the actual images and reason about the setup. "
+    'Reply with ONLY JSON: {'
+    '"front_ok": true|false, "side_ok": true|false, '
+    '"posture": "good|slumping|leaning|forward_head|rounded_shoulders|too_close|unknown", '
+    '"problem": "<the single biggest issue with the camera setup or posture RIGHT NOW, <=12 words>", '
+    '"fix": "<one concrete action to improve it, <=14 words>", '
+    '"explanation": "<2-4 sentences in plain language: why each camera will or will not work, '
+    'and what we can and cannot measure with this setup right now>"}. '
+    "If only the front image is given, set side_ok=false and explain that adding a "
+    "side camera (e.g. an iPhone via Continuity Camera) unlocks forward-head detection."
+)
+
+
+def assess(front_bytes, side_bytes=None):
+    """Two-camera setup diagnosis: the LLM looks at front (+ optional side) and
+    explains in plain language why the setup works / what's wrong right now."""
+    content = [{"type": "text", "text": "Image 1 — FRONT camera view:"}, _img(front_bytes)]
+    if side_bytes:
+        content += [{"type": "text", "text": "Image 2 — SIDE camera view:"}, _img(side_bytes)]
+    else:
+        content += [{"type": "text", "text": "(No side camera connected.)"}]
+    content.append({"type": "text", "text": ASSESS_PROMPT})
+    msg = client().messages.create(
+        model=MODEL, max_tokens=500,
+        messages=[{"role": "user", "content": content}])
+    txt = msg.content[0].text if msg.content else ""
+    d = _json(txt)
+    return {
+        "front_ok": bool(d.get("front_ok", False)),
+        "side_ok": bool(d.get("side_ok", False)),
+        "posture": d.get("posture", "unknown"),
+        "problem": d.get("problem", ""),
+        "fix": d.get("fix", ""),
+        "explanation": d.get("explanation") or (txt[:300] if txt else "no response"),
+        "has_side": side_bytes is not None,
     }
