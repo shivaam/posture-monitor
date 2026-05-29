@@ -107,14 +107,17 @@ final class AppModel {
                                    "tilt": tiltDeg, "mpShoulders": lastMP.shouldersFound])
         }
 
+        // Three dimensions, each 0..1 (1 = matches your calibrated baseline).
+        let headFrac = max(0, min(1, res.ratio))
+        let leanFrac = logic.calibrated ? max(0, 1 - abs(tiltDeg - logic.baseTilt) / logic.tiltThresh) : 1
+        let distFrac = (logic.calibrated && logic.baseWidth > 0)
+            ? max(0, min(1, logic.baseWidth / max(0.0001, r.faceSize))) : 1
+        // Composite score = the weakest dimension, so any problem pulls it below 100.
+        let score = present ? Int((min(headFrac, leanFrac, distFrac) * 100).rounded()) : 0
+
         onState?(State(
-            status: res.status, score: max(0, min(100, Int(res.ratio * 100))),
-            headFrac: max(0, min(1, res.ratio)),
-            // Lean: full when at your calibrated tilt, empties as you deviate to the threshold.
-            leanFrac: logic.calibrated ? max(0, 1 - abs(tiltDeg - logic.baseTilt) / logic.tiltThresh) : 1,
-            // Distance: full at your calibrated distance; drops as your face grows (leaning in).
-            distFrac: (logic.calibrated && logic.baseWidth > 0)
-                ? max(0, min(1, logic.baseWidth / max(0.0001, r.faceSize))) : 1,
+            status: res.status, score: score,
+            headFrac: headFrac, leanFrac: leanFrac, distFrac: distFrac,
             points: lastMP.points,
             camW: r.frameW > 0 ? r.frameW : 16, camH: r.frameH > 0 ? r.frameH : 9,
             recording: vision.isRecording,
