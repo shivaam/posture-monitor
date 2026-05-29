@@ -247,6 +247,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var recordButton: NSButton!
     private var recIndicator: NSTextField!
     private var blinkTimer: Timer?
+    private var sideCam: SideCamera?
+    private var sideLabel: NSTextField!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let rect = NSRect(x: 0, y: 0, width: 740, height: 480)
@@ -308,6 +310,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.onState = { [weak self] s in self?.render(s) }
         model.onCameraDenied = { [weak self] in self?.cameraDenied() }
         model.start()
+
+        // EXPERIMENTAL side camera (gated). Default off -> stable app untouched.
+        sideLabel = mk("", 12, .regular, NSColor(srgbRed: 0.36, green: 0.86, blue: 1, alpha: 1))
+        sideLabel.frame = NSRect(x: 460, y: 78, width: 270, height: 16)
+        content.addSubview(sideLabel)
+        if model.config.sideCamera {
+            let sc = SideCamera()
+            sc.onSide = { [weak self] deg, present in
+                self?.sideLabel.stringValue = present
+                    ? String(format: "Side  forward-head %.0f°", deg ?? 0)
+                    : "Side  (no person)"
+            }
+            sc.start()
+            sideLabel.stringValue = sc.available ? "Side  starting…" : "Side  connect a 2nd camera / iPhone"
+            sideCam = sc
+        }
 
         // blink the REC dot while recording
         blinkTimer = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: true) { [weak self] _ in
