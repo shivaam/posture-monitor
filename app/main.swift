@@ -110,8 +110,11 @@ final class AppModel {
         onState?(State(
             status: res.status, score: max(0, min(100, Int(res.ratio * 100))),
             headFrac: max(0, min(1, res.ratio)),
-            leanFrac: max(0, 1 - abs(tiltDeg) / 15),
-            distFrac: res.tooClose ? 0.35 : 0.85,
+            // Lean: full when at your calibrated tilt, empties as you deviate to the threshold.
+            leanFrac: logic.calibrated ? max(0, 1 - abs(tiltDeg - logic.baseTilt) / logic.tiltThresh) : 1,
+            // Distance: full at your calibrated distance; drops as your face grows (leaning in).
+            distFrac: (logic.calibrated && logic.baseWidth > 0)
+                ? max(0, min(1, logic.baseWidth / max(0.0001, r.faceSize))) : 1,
             points: lastMP.points,
             camW: r.frameW > 0 ? r.frameW : 16, camH: r.frameH > 0 ? r.frameH : 9,
             recording: vision.isRecording,
