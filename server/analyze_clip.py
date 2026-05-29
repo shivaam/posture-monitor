@@ -7,6 +7,7 @@ Needs opencv (`pip install opencv-python`) in addition to the server reqs.
 
     ../.venv/bin/python analyze_clip.py ~/Movies/PostureMonitor/clip_*.mp4 [secs_between=1.0]
 """
+import json
 import os
 import sys
 
@@ -42,6 +43,25 @@ def main():
     every = float(sys.argv[2]) if len(sys.argv) > 2 else 1.0
     out = "/tmp/clip_analysis"
     os.makedirs(out, exist_ok=True)
+
+    # Sidecar tells us the user's calibrated baseline ("where they started").
+    events_path = path.rsplit(".", 1)[0] + ".events.jsonl"
+    cal = None
+    if os.path.exists(events_path):
+        for ln in open(events_path):
+            try:
+                e = json.loads(ln)
+            except Exception:
+                continue
+            if e.get("type") == "calibrate":
+                cal = e
+        if cal:
+            print("calibration baseline @t=%ss: head=%s tilt=%s width=%s" % (
+                cal.get("t"), cal.get("baseHead"), cal.get("baseTilt"), cal.get("baseWidth")))
+        else:
+            print("sidecar present but no calibration event")
+    else:
+        print("no sidecar events file (clip not from the app, or never calibrated)")
     cap = cv2.VideoCapture(path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 30
     step = max(1, int(fps * every))

@@ -41,8 +41,9 @@ final class PostureLogic {
     private let smoothN = 15, stableN = 45
     private let stableStd = 0.020
     private var headS: [Double] = [], tiltS: [Double] = [], widthS: [Double] = [], stable: [Double] = []
-    private var baseHead: Double?
-    private var baseTilt = 0.0, baseWidth = 0.0
+    private(set) var baseHead: Double?
+    private(set) var baseTilt = 0.0
+    private(set) var baseWidth = 0.0
     private var badSince: Double?
     private var lastAlert = -1e9
     private var goodFrames = 0, totalFrames = 0
@@ -241,6 +242,8 @@ final class ClipRecorder {
     private var started = false
     private(set) var isRecording = false
     private(set) var lastURL: URL?
+    private var eventsURL: URL?
+    private var evT0 = 0.0
 
     private let dir: URL = {
         let d = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Movies/PostureMonitor")
@@ -251,9 +254,27 @@ final class ClipRecorder {
     func start() {
         guard !isRecording else { return }
         let f = DateFormatter(); f.dateFormat = "yyyyMMdd-HHmmss"
-        lastURL = dir.appendingPathComponent("clip_\(f.string(from: Date())).mp4")
+        let base = "clip_\(f.string(from: Date()))"
+        lastURL = dir.appendingPathComponent(base + ".mp4")
+        eventsURL = dir.appendingPathComponent(base + ".events.jsonl")
+        try? FileManager.default.removeItem(at: eventsURL!)
+        evT0 = ProcessInfo.processInfo.systemUptime
         writer = nil; input = nil; started = false
         isRecording = true
+        event(["type": "start"])
+    }
+
+    /// Append a timestamped event (calibration baseline, periodic samples) to the
+    /// clip's sidecar JSONL — so the clip is self-describing for training/analysis.
+    func event(_ payload: [String: Any]) {
+        guard isRecording, let url = eventsURL else { return }
+        var p = payload
+        p["t"] = ((ProcessInfo.processInfo.systemUptime - evT0) * 100).rounded() / 100   // secs since rec start
+        guard let data = try? JSONSerialization.data(withJSONObject: p),
+              let line = String(data: data, encoding: .utf8)?.appending("\n"),
+              let bytes = line.data(using: .utf8) else { return }
+        if let fh = try? FileHandle(forWritingTo: url) { fh.seekToEndOfFile(); fh.write(bytes); try? fh.close() }
+        else { try? bytes.write(to: url) }
     }
 
     /// Called every camera frame (on the camera queue). Lazily builds the writer
@@ -282,6 +303,7 @@ final class ClipRecorder {
 
     func stop(_ done: @escaping (URL?) -> Void) {
         guard isRecording else { DispatchQueue.main.async { done(nil) }; return }
+        event(["type": "stop"])
         isRecording = false
         let url = lastURL
         input?.markAsFinished()

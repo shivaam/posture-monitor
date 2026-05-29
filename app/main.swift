@@ -18,6 +18,7 @@ final class AppModel {
     private var lastMP = MPReading()
     private var lastPresent = 0.0
     private var wasAlerted = false
+    private var wasCalibrated = false
     private var frames = 0
     private let cueDir = Bundle.main.resourcePath ?? "cues"
     private let logURL = URL(fileURLWithPath: "/tmp/posture-monitor.log")
@@ -47,7 +48,7 @@ final class AppModel {
         vision.startRecording()        // auto-record from launch (for training clips)
         log("recording started (auto)")
     }
-    func recalibrate() { logic.recalibrate() }
+    func recalibrate() { logic.recalibrate(); wasCalibrated = false }
 
     /// Toggle clip recording. Calls back with the new recording state.
     func toggleRecord(_ done: @escaping (Bool) -> Void) {
@@ -86,9 +87,24 @@ final class AppModel {
             wasAlerted = false; playCue("posture_good.wav")
         }
 
+        // Record the calibration baseline into the clip's sidecar — so a recorded
+        // clip knows "where the user started" for later analysis/training.
+        if logic.calibrated && !wasCalibrated {
+            vision.recorder.event(["type": "calibrate",
+                                   "baseHead": logic.baseHead ?? 0,
+                                   "baseTilt": logic.baseTilt,
+                                   "baseWidth": logic.baseWidth])
+        }
+        wasCalibrated = logic.calibrated
+
         frames += 1
         if frames % 30 == 0 {
             log("fused status=\(res.status) ratio=\(String(format: "%.2f", res.ratio)) tilt=\(String(format: "%.0f", tiltDeg)) mpShoulders=\(lastMP.shouldersFound) pts=\(lastMP.points.count) rec=\(vision.isRecording)")
+            vision.recorder.event(["type": "sample", "status": "\(res.status)",
+                                   "ratio": (res.ratio * 100).rounded() / 100,
+                                   "headY": (r.headY * 1000).rounded() / 1000,
+                                   "faceSize": (r.faceSize * 1000).rounded() / 1000,
+                                   "tilt": tiltDeg, "mpShoulders": lastMP.shouldersFound])
         }
 
         onState?(State(
