@@ -38,6 +38,18 @@ async def check_placement(file: UploadFile = File(...), view: str = Form("side")
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 
+@app.post("/judge")
+async def judge(front: UploadFile = File(...), side: UploadFile = File(None)):
+    """Lightweight periodic posture judgment: posture + confidence + side_usable.
+    Used to gate alerts and decide whether the side camera is trustworthy."""
+    fb = await front.read()
+    sb = await side.read() if side is not None else None
+    try:
+        return placement.judge(fb, sb)
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
 @app.post("/assess_setup")
 async def assess_setup(front: UploadFile = File(...), side: UploadFile = File(None)):
     """Two-camera setup diagnosis: the vision LLM looks at the front (+ optional

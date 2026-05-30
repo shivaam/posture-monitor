@@ -251,13 +251,49 @@ struct SetupAssessment {
     var posture = "", problem = "", fix = "", explanation = ""
 }
 
+/// Lightweight periodic posture judgment (posture + confidence + is-side-usable).
+struct JudgeResult {
+    var posture = "unknown"
+    var confidence = 0.0
+    var sideUsable = false
+    var note = ""
+    var bad: Bool { ["slumping", "leaning", "forward_head", "too_close", "rounded_shoulders"].contains(posture) }
+}
+
 /// POSTs frames to the server, which asks a vision LLM about camera placement /
 /// the whole setup (no hand-coded geometry — the LLM reasons about the images).
 final class PlacementClient {
     private let endpoint = URL(string: "\(postureServerBase)/check_placement")!
     private let assessEndpoint = URL(string: "\(postureServerBase)/assess_setup")!
+    private let judgeEndpoint = URL(string: "\(postureServerBase)/judge")!
     private var inFlight = false
     private var assessInFlight = false
+    private var judgeInFlight = false
+
+    /// Periodic posture judgment from the vision LLM (front + optional side).
+    func judge(front: Data, side: Data?, completion: @escaping (JudgeResult?) -> Void) {
+        guard !judgeInFlight else { completion(nil); return }
+        judgeInFlight = true
+        let boundary = "B\(Int(Date().timeIntervalSince1970 * 1000))"
+        var req = URLRequest(url: judgeEndpoint); req.httpMethod = "POST"; req.timeoutInterval = 30
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        var body = Data()
+        appendFile(&body, boundary: boundary, name: "front", front)
+        if let side { appendFile(&body, boundary: boundary, name: "side", side) }
+        body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+        req.httpBody = body
+        URLSession.shared.dataTask(with: req) { data, _, _ in
+            defer { self.judgeInFlight = false }
+            guard let data, let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let posture = o["posture"] as? String else { DispatchQueue.main.async { completion(nil) }; return }
+            var j = JudgeResult()
+            j.posture = posture
+            j.confidence = o["confidence"] as? Double ?? 0
+            j.sideUsable = o["side_usable"] as? Bool ?? false
+            j.note = o["note"] as? String ?? ""
+            DispatchQueue.main.async { completion(j) }
+        }.resume()
+    }
 
     /// Multipart helper: append one file part to `body`.
     private func appendFile(_ body: inout Data, boundary: String, name: String, _ jpeg: Data) {

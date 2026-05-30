@@ -73,7 +73,9 @@ final class SideCamera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
 
     private func handle(_ r: MPReading) {
         if !gotFirstReading { gotFirstReading = true; plog("side: first MediaPipe reading ok=\(r.ok) shoulders=\(r.shouldersFound) pts=\(r.points.count)") }
-        func vp(_ k: String) -> (CGPoint, Double)? { let v = r.points[k]; return (v != nil && v!.1 > 0.3) ? v! : nil }
+        // Require fairly confident landmarks (0.5) — low-visibility ear/shoulder on a
+        // near-frontal side view produce garbage angles that wreck the score.
+        func vp(_ k: String) -> (CGPoint, Double)? { let v = r.points[k]; return (v != nil && v!.1 > 0.5) ? v! : nil }
         // Use whichever side faces the camera (higher-visibility ear+shoulder pair).
         let pairs = [("leftEar", "leftShoulder"), ("rightEar", "rightShoulder")]
             .compactMap { (e, s) -> (CGPoint, CGPoint, Double)? in
@@ -88,6 +90,10 @@ final class SideCamera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
         let dx = abs(ear.x - sh.x)            // ear ahead of shoulder (forward head)
         let dy = max(0.0001, abs(sh.y - ear.y))
         let deg = atan2(dx, dy) * 180 / .pi   // 0 = ear straight above shoulder; grows as head juts forward
-        DispatchQueue.main.async { self.onFrame?(pts, sz.w, sz.h, Double(deg), true) }
+        // Reject implausible angles (>45° at a desk = mis-detection / not a real
+        // profile): report present but with NO usable measurement, so it doesn't
+        // drag the score down on a bad frame.
+        let usable: Double? = (deg >= 0 && deg <= 45) ? Double(deg) : nil
+        DispatchQueue.main.async { self.onFrame?(pts, sz.w, sz.h, usable, true) }
     }
 }

@@ -99,6 +99,47 @@ ASSESS_PROMPT = (
 )
 
 
+JUDGE_PROMPT = (
+    "You are judging a person's SEATED DESK posture from camera frames, for a "
+    "posture monitor that nudges them when they slouch. Image 1 = FRONT view. "
+    "Image 2 (if present) = SIDE view. Decide their CURRENT posture and how "
+    "confident you are. Also say whether the SIDE view is a usable profile "
+    "(ear and shoulder clearly visible side-on) — if not, its numbers can't be trusted. "
+    'Reply with ONLY JSON: {'
+    '"posture":"good|slumping|leaning|forward_head|too_close|unknown",'
+    '"confidence":0.0-1.0,'
+    '"side_usable":true|false,'
+    '"note":"<=10 words, what you see"}. '
+    "Be conservative: only report a non-good posture with confidence>=0.7 if it is "
+    "clearly and obviously visible. When unsure, say good or unknown with low confidence."
+)
+
+
+def judge(front_bytes, side_bytes=None):
+    """Lightweight periodic posture judgment (posture + confidence + is-side-usable).
+    Cheaper/faster than assess(); used to gate alerts and the side-camera trust."""
+    content = [{"type": "text", "text": "FRONT view:"}, _img(front_bytes)]
+    if side_bytes:
+        content += [{"type": "text", "text": "SIDE view:"}, _img(side_bytes)]
+    content.append({"type": "text", "text": JUDGE_PROMPT})
+    msg = client().messages.create(
+        model=MODEL, max_tokens=120,
+        messages=[{"role": "user", "content": content}])
+    txt = msg.content[0].text if msg.content else ""
+    d = _json(txt)
+    conf = d.get("confidence", 0)
+    try:
+        conf = float(conf)
+    except Exception:
+        conf = 0.0
+    return {
+        "posture": d.get("posture", "unknown"),
+        "confidence": max(0.0, min(1.0, conf)),
+        "side_usable": bool(d.get("side_usable", False)),
+        "note": d.get("note", ""),
+    }
+
+
 def assess(front_bytes, side_bytes=None):
     """Two-camera setup diagnosis: the LLM looks at front (+ optional side) and
     explains in plain language why the setup works / what's wrong right now."""

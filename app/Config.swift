@@ -18,6 +18,13 @@ struct Config {
     var sideCamera = false
     var experimental = false
 
+    // vision-LLM posture judge: periodically judge posture from the camera(s); used
+    // to alert on high-confidence bad posture and to decide if the side camera is
+    // trustworthy enough to affect the score. On by default (no-op if server down).
+    var llmJudge = true
+    var judgeInterval = 30.0      // seconds between LLM judgments
+    var judgeConfidence = 0.7     // min LLM confidence to fire an alert
+
     static let url = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".posturemonitor.json")
 
@@ -31,6 +38,9 @@ struct Config {
         if let v = j["proximityMargin"] as? Double { c.proximityMargin = v }
         if let v = j["sideCamera"] as? Bool { c.sideCamera = v }
         if let v = j["experimental"] as? Bool { c.experimental = v }
+        if let v = j["llmJudge"] as? Bool { c.llmJudge = v }
+        if let v = j["judgeInterval"] as? Double { c.judgeInterval = v }
+        if let v = j["judgeConfidence"] as? Double { c.judgeConfidence = v }
         return c
     }
 }

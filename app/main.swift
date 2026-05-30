@@ -25,10 +25,12 @@ final class AppModel {
     var muted = false
     var paused = false
     var sideActive = false         // a side camera is wired (shows the Shoulders bar)
+    var sideTrusted = false        // LLM confirms the side view is a usable profile -> count it
     var sideForwardFrac = 1.0      // 1 = no side cam / good; drops with forward-head
     private var emaSideDeg = 0.0   // smoothed side forward-head angle (raw is jittery)
     private var sideBaseDeg: Double?   // neutral angle captured at calibration
     private var sideSeen = false
+    private var lastJudgeAlert = -1e9
 
     private var lastVision = VisionReading()
     private var lastMP = MPReading()
@@ -47,6 +49,7 @@ final class AppModel {
         var distFrac: Double
         var shoulderFrac: Double = 1               // side-cam forward-head (1 = at neutral)
         var sideActive: Bool = false               // show the Shoulders bar?
+        var sideTrusted: Bool = false              // does it count toward the score?
         var points: [String: (CGPoint, Double)]   // MediaPipe landmarks for the overlay
         var camW: Double
         var camH: Double
@@ -139,16 +142,18 @@ final class AppModel {
         let leanFrac = logic.calibrated ? max(0, 1 - abs(emaTilt - logic.baseTilt) / logic.tiltThresh) : 1
         let distFrac = (logic.calibrated && logic.baseWidth > 0)
             ? max(0, min(1, logic.baseWidth / max(0.0001, r.faceSize))) : 1
-        // Composite score = the weakest dimension (incl. side-cam forward-head when
-        // present; sideForwardFrac is 1 with no side cam, so it's a no-op then).
-        // -1 = no score yet (calibrating / away) -> shown as "--", not a fake 100.
+        // Composite score = the weakest dimension. The side camera only counts when
+        // the LLM has confirmed it's a usable profile (sideTrusted) — otherwise a
+        // poor side view would drag the score down on noise. sideFrac is 1 when the
+        // side is absent/untrusted, so it's a no-op then.
+        let sideFrac = (sideActive && sideTrusted) ? sideForwardFrac : 1.0
         let score = (present && logic.calibrated)
-            ? Int((min(headFrac, leanFrac, distFrac, sideForwardFrac) * 100).rounded()) : -1
+            ? Int((min(headFrac, leanFrac, distFrac, sideFrac) * 100).rounded()) : -1
 
         onState?(State(
             status: res.status, score: score,
             headFrac: headFrac, leanFrac: leanFrac, distFrac: distFrac,
-            shoulderFrac: sideForwardFrac, sideActive: sideActive,
+            shoulderFrac: sideForwardFrac, sideActive: sideActive, sideTrusted: sideTrusted,
             points: lastMP.points,
             camW: r.frameW > 0 ? r.frameW : 16, camH: r.frameH > 0 ? r.frameH : 9,
             recording: vision.isRecording,
@@ -169,6 +174,21 @@ final class AppModel {
         let dev = max(0, emaSideDeg - (sideBaseDeg ?? emaSideDeg))   // ° of forward-head beyond neutral
         sideForwardFrac = max(0, min(1, 1 - dev / 20))     // full at neutral, empty ~20° beyond
         return sideForwardFrac
+    }
+
+    // Apply a vision-LLM posture judgment: (1) decide whether the side camera is
+    // a usable profile (gates its score contribution), (2) fire an alert when the
+    // LLM is confident the posture is bad. Independent of the heuristic alerts.
+    func applyJudge(_ j: JudgeResult, minConfidence: Double) {
+        sideTrusted = j.sideUsable
+        guard !paused, j.bad, j.confidence >= minConfidence else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now - lastJudgeAlert >= logic.cooldown else { return }
+        lastJudgeAlert = now
+        let close = (j.posture == "too_close")
+        playCue(close ? "posture_close.wav" : "posture_slump.wav")
+        notify("Posture check — \(j.note.isEmpty ? j.posture : j.note). Reset and sit tall.")
+        log("judge ALERT posture=\(j.posture) conf=\(String(format: "%.2f", j.confidence)) note=\(j.note)")
     }
 
     private func playCue(_ name: String) { if !muted { run("/usr/bin/afplay", [cueDir + "/" + name]) } }
@@ -277,6 +297,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var recordButton: NSButton!
     private var recIndicator: NSTextField!
     private var blinkTimer: Timer?
+    private var judgeTimer: Timer?
     private var sideCam: SideCamera?
     private var sidePanel: CameraPanel?
     private var sideLabel: NSTextField!
@@ -404,6 +425,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let r = self?.recIndicator, !r.isHidden else { return }
             r.alphaValue = r.alphaValue > 0.6 ? 0.25 : 1.0
         }
+
+        // Periodic vision-LLM posture judge: gates the side camera's trust + alerts
+        // on high-confidence bad posture. Cheap (one call every judgeInterval).
+        if model.config.llmJudge {
+            judgeTimer = Timer.scheduledTimer(withTimeInterval: max(10, model.config.judgeInterval),
+                                              repeats: true) { [weak self] _ in self?.runJudge() }
+        }
+    }
+
+    // Capture current front (+ side) frames and ask the LLM to judge posture.
+    private func runJudge() {
+        guard let front = model.vision.lastJPEG else { return }
+        let side = sideCam?.lastJPEG
+        placement.judge(front: front, side: side) { [weak self] j in
+            guard let self, let j else { return }
+            self.model.applyJudge(j, minConfidence: self.model.config.judgeConfidence)
+            plog("judge posture=\(j.posture) conf=\(String(format: "%.2f", j.confidence)) sideUsable=\(j.sideUsable) note=\(j.note)")
+            if self.model.sideActive {
+                self.sideHint.stringValue = (j.sideUsable ? "✓ side counts · " : "⚠︎ side not counted · ") + (j.note.isEmpty ? j.posture : j.note)
+                self.sideHint.textColor = j.sideUsable ? Palette.good : Palette.warn
+            }
+        }
     }
 
     private func render(_ s: AppModel.State) {
@@ -414,7 +457,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         bars["Head height"]?.frac = CGFloat(s.headFrac); bars["Head height"]?.color = c
         bars["Lean"]?.frac = CGFloat(s.leanFrac); bars["Lean"]?.color = c
         bars["Distance"]?.frac = CGFloat(s.distFrac); bars["Distance"]?.color = c
-        bars["Shoulders"]?.frac = CGFloat(s.shoulderFrac); bars["Shoulders"]?.color = c
+        // Shoulders is muted gray when the side view isn't trusted (shown, not counted).
+        bars["Shoulders"]?.frac = CGFloat(s.shoulderFrac)
+        bars["Shoulders"]?.color = s.sideTrusted ? c : Palette.textMuted
         visLabel.stringValue = s.visionText; mpLabel.stringValue = s.mpText
         recIndicator.isHidden = !s.recording
     }
