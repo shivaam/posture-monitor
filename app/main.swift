@@ -84,13 +84,16 @@ final class AppModel {
         wasCalibrated = logic.calibrated
 
         // SLOUCH = head drops vs shoulders (MediaPipe) OR whole head sinks (Vision).
+        // ONE sensitivity slider (slouchThresh) drives BOTH signals: the head-Y margin
+        // is derived from it, so dragging the slider visibly changes everything.
         let slouchRatio = (logic.calibrated && baseHeadAbove > 0 && emaHeadAbove > 0) ? emaHeadAbove / baseHeadAbove : 1
         let headYDrop = (logic.calibrated && baseHeadY > 0 && emaHeadY > 0) ? max(0, baseHeadY - emaHeadY) : 0
+        let headYMargin = max(0.015, 0.095 - (slouchThresh - 0.80) * 0.45)   // more sensitive slider -> smaller margin
         let slouchFront = slouchRatio < slouchThresh
-        let slouchSink = headYDrop > config.headYMargin
+        let slouchSink = headYDrop > headYMargin
         // Hysteresis: flip to slouching on a clear drop, back only after a clear recovery.
         if slouchFront || slouchSink { slouchState = true }
-        else if slouchRatio > slouchThresh + 0.05 && headYDrop < config.headYMargin * 0.6 { slouchState = false }
+        else if slouchRatio > slouchThresh + 0.05 && headYDrop < headYMargin * 0.6 { slouchState = false }
         let slouching = present && logic.calibrated && slouchState
 
         if slouching {
@@ -104,14 +107,14 @@ final class AppModel {
             }
         } else {
             slouchSince = 0
-            if wasAlerted && slouchRatio > slouchThresh + 0.05 && headYDrop < config.headYMargin {
+            if wasAlerted && slouchRatio > slouchThresh + 0.05 && headYDrop < headYMargin {
                 wasAlerted = false; plog("RECOVER (muted=\(muted))"); recoverSound(); onAlert?("Nice — back to good posture", true)
             }
         }
 
         let slouchFloor = slouchThresh - 0.10
         let frontFrac = max(0, min(1, (slouchRatio - slouchFloor) / max(0.001, 1 - slouchFloor)))
-        let headYFrac = (logic.calibrated && baseHeadY > 0) ? max(0, min(1, 1 - headYDrop / (config.headYMargin + 0.04))) : 1
+        let headYFrac = (logic.calibrated && baseHeadY > 0) ? max(0, min(1, 1 - headYDrop / (headYMargin + 0.04))) : 1
         let postureFrac = min(frontFrac, headYFrac)
         let score = (present && logic.calibrated) ? Int((postureFrac * 100).rounded()) : -1
         let status: PostureLogic.Status = !present ? .away : (!logic.calibrated ? .settling : (slouching ? .slumping : .good))
@@ -242,7 +245,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mute.frame = NSRect(x: 214, y: 20, width: 64, height: 22); content.addSubview(mute)
         let sensLbl = mk("sensitivity", 11, .regular, Palette.textMuted)
         sensLbl.frame = NSRect(x: 300, y: 20, width: 70, height: 18); content.addSubview(sensLbl)
-        let sens = NSSlider(value: model.slouchThresh, minValue: 0.75, maxValue: 0.95,
+        let sens = NSSlider(value: model.slouchThresh, minValue: 0.80, maxValue: 0.97,
                             target: self, action: #selector(sens(_:)))
         sens.frame = NSRect(x: 372, y: 20, width: 200, height: 22); content.addSubview(sens)
 

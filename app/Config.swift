@@ -4,8 +4,8 @@
 import Foundation
 
 struct Config {
-    var slouchThresh = 0.87       // head-above-shoulders ratio below baseline that = slouching (lower = less sensitive)
-    var headYMargin = 0.05        // absolute head drop below baseline that = slouching (catches whole-body sink)
+    var slouchThresh = 0.90       // sensitivity: head-drop ratio below baseline that = slouching (lower = less sensitive).
+                                  // Also derives the head-sink margin, so one slider drives both signals.
     var slouchGrace = 8.0         // seconds of slouch before it nudges you
     var slouchCooldown = 45.0     // min seconds between nudges
     var speakAlerts = false       // also say "sit up straight" out loud
@@ -18,7 +18,6 @@ struct Config {
         guard let data = try? Data(contentsOf: url),
               let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return c }
         if let v = j["slouchThresh"] as? Double { c.slouchThresh = v }
-        if let v = j["headYMargin"] as? Double { c.headYMargin = v }
         if let v = j["slouchGrace"] as? Double { c.slouchGrace = v }
         if let v = j["slouchCooldown"] as? Double { c.slouchCooldown = v }
         if let v = j["speakAlerts"] as? Bool { c.speakAlerts = v }
