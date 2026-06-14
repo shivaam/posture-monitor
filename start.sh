@@ -6,6 +6,22 @@
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
+# 0. Pre-flight: the two prerequisites, checked up front with friendly guidance.
+if ! xcode-select -p >/dev/null 2>&1; then
+  echo "✗ Xcode command-line tools missing. Install them, then re-run:"
+  echo "    xcode-select --install"
+  exit 1
+fi
+if [ ! -d "$HERE/app/PostureMonitor.app" ]; then
+  ok=""
+  for c in python3.12 python3.11 python3.10 python3.9 python3; do
+    command -v "$c" >/dev/null 2>&1 || continue
+    m=$("$c" -c 'import sys;print(sys.version_info[1])' 2>/dev/null || echo 99)
+    [ "$m" -le 12 ] 2>/dev/null && ok="$c" && break
+  done
+  [ -z "$ok" ] && { echo "✗ Need Python 3.9–3.12 for MediaPipe (your python3 may be newer)."; echo "    brew install python@3.12"; exit 1; }
+fi
+
 # 1. Server on :8077 (only if not already responding)
 if curl -s -m 2 http://127.0.0.1:8077/health >/dev/null 2>&1; then
   echo "✓ server already running on :8077"
