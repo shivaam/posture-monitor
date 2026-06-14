@@ -21,6 +21,6 @@
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.healthcare-fitness</string>
     <key>NSCameraUsageDescription</key>
-    <string>PostureMonitor watches your sitting posture and gently nudges you when you slump or lean into the screen. Video stays on your Mac.</string>
+    <string>PostureMonitor watches your sitting posture and gently nudges you when you slump. Video stays on your Mac.</string>
 </dict>
 </plist>
