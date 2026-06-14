@@ -15,6 +15,15 @@ func plog(_ s: String) {
     else { try? d.write(to: posLogURL) }
 }
 
+// A dimension score 0..1: a full 1 within a DEADZONE of the calibrated baseline,
+// then linear down to 0 at the "bad" threshold. So small natural drift reads as
+// 100 and the score only falls once you've meaningfully moved. `dev` is how far
+// past baseline you are; `thresh` is the deviation that means bad.
+func tolFrac(_ dev: Double, _ thresh: Double, dead: Double = 0.35) -> Double {
+    let d = thresh * dead
+    return max(0, min(1, 1 - max(0, dev - d) / max(0.001, thresh - d)))
+}
+
 // MARK: - App model (fusion + alerts)
 
 final class AppModel {
@@ -24,13 +33,25 @@ final class AppModel {
     let config = Config.load()
     var muted = false
     var paused = false
+    var slouchThresh = 0.87        // live sensitivity (head-drop ratio); the slider sets this
     var sideActive = false         // a side camera is wired (shows the Shoulders bar)
     var sideTrusted = false        // LLM confirms the side view is a usable profile -> count it
     var sideForwardFrac = 1.0      // 1 = no side cam / good; drops with forward-head
+    private(set) var lastMetrics: [String: Any] = [:]   // latest raw metrics + call, for the self-loop
     private var emaSideDeg = 0.0   // smoothed side forward-head angle (raw is jittery)
     private var sideBaseDeg: Double?   // neutral angle captured at calibration
     private var sideSeen = false
+    private var baseShoulderW = 0.0    // MediaPipe shoulder width at calibration (for rotation guard)
     private var lastJudgeAlert = -1e9
+    private var leanOKUntil = 0.0      // LLM recently confirmed "not leaning" -> trust it over the noisy tilt
+    // SIMPLE SLOUCH CORE — the one signal that works (head height above shoulders).
+    private var baseHeadAbove = 0.0    // calibrated upright value
+    private var emaHeadAbove = 0.0     // smoothed live value
+    private var baseHeadY = 0.0        // calibrated absolute head position (Vision face-Y)
+    private var emaHeadY = 0.0         // smoothed live head-Y (catches whole-body sink)
+    private var slouchSince = 0.0      // when the current slouch started (0 = not slouching)
+    private var slouchState = false    // hysteresis-stabilized slouch flag (no flicker)
+    private var lastSlouchAlert = -1e9
 
     private var lastVision = VisionReading()
     private var lastMP = MPReading()
@@ -50,6 +71,8 @@ final class AppModel {
         var shoulderFrac: Double = 1               // side-cam forward-head (1 = at neutral)
         var sideActive: Bool = false               // show the Shoulders bar?
         var sideTrusted: Bool = false              // does it count toward the score?
+        var slouchHold: Double = 0                 // seconds the current slouch has been held (0 = not slouching)
+        var grace: Double = 8                      // seconds of slouch before the alarm fires
         var points: [String: (CGPoint, Double)]   // MediaPipe landmarks for the overlay
         var camW: Double
         var camH: Double
@@ -59,8 +82,10 @@ final class AppModel {
     }
     var onState: ((State) -> Void)?
     var onCameraDenied: (() -> Void)?
+    var onAlert: ((_ message: String, _ good: Bool) -> Void)?   // drives the on-screen toast
 
     func start() {
+        slouchThresh = config.slouchThresh             // live sensitivity from config
         logic.sensitivity = config.sensitivity        // tunable defaults from config
         logic.tiltThresh = config.tiltThresh
         logic.proximityMargin = config.proximityMargin
@@ -100,18 +125,57 @@ final class AppModel {
         let head = present ? r.headY : nil
         let width = present ? r.faceSize : nil
         let tiltDeg = lastMP.shouldersFound ? (lastMP.tiltDeg ?? 0) : 0
-        let tilt: Double? = present ? tiltDeg : nil
         emaTilt = emaTilt * 0.9 + tiltDeg * 0.1     // heavy smoothing -> the lean bar glides
 
-        let res = logic.update(now: now, present: present, head: head, tilt: tilt, width: width)
+        // ROTATION GUARD: when you TURN (yaw) your shoulders foreshorten — the
+        // shoulder line looks tilted in 2D even though you're upright. Detect the
+        // turn via shrinking shoulder width and DON'T count it as lean (that was
+        // the "I turn and get 0" bug). Lean is only trusted when facing forward.
+        let shoulderW = lastMP.shouldersFound ? (lastMP.width ?? 0) : 0
+        let turned = baseShoulderW > 0 && shoulderW > 0 && (shoulderW / baseShoulderW) < 0.82
+        // SLOUCH SIGNAL: head height above shoulders (shoulder-relative; the labeled
+        // test showed this is the one metric that separates upright from slouch).
+        let headAbove = lastMP.shouldersFound ? (lastMP.headAbove ?? 0) : 0
+        if headAbove > 0 { emaHeadAbove = emaHeadAbove > 0 ? emaHeadAbove * 0.8 + headAbove * 0.2 : headAbove }
+        // ABSOLUTE head position (Vision) — drops when the whole body sinks, which the
+        // shoulder-relative headAbove can miss. Second, independent slouch signal.
+        if r.faceFound { emaHeadY = emaHeadY > 0 ? emaHeadY * 0.8 + r.headY * 0.2 : r.headY }
+        // Suppress the lean heuristic when turned OR when the LLM recently confirmed
+        // you're not leaning (it's the reliable judge; tilt is noisy).
+        let leanMuted = turned || now < leanOKUntil
+        // Feed the logic a non-leaning tilt while muted, so it won't false-alarm.
+        let tilt: Double? = present ? (leanMuted ? logic.baseTilt : tiltDeg) : nil
 
-        if res.fire {
-            wasAlerted = true
-            playCue(res.tooClose ? "posture_close.wav" : "posture_slump.wav")
-            notify(res.tooClose ? "Ease back — you're leaning into the screen."
-                                : "Sit up — your posture has drifted. Reset and breathe.")
-        } else if res.status == .good && wasAlerted {
-            wasAlerted = false; playCue("posture_good.wav")
+        _ = logic.update(now: now, present: present, head: head, tilt: tilt, width: width)  // drives calibration
+
+        // SLOUCH = head drops (front) OR head juts forward (side). Two clean,
+        // baseline-relative signals OR'd; the grace period filters brief look-downs.
+        let slouchRatio = (logic.calibrated && baseHeadAbove > 0 && emaHeadAbove > 0) ? emaHeadAbove / baseHeadAbove : 1
+        let sideDev = (sideActive && sideSeen && sideBaseDeg != nil) ? max(0, emaSideDeg - (sideBaseDeg ?? 0)) : 0
+        let headYDrop = (logic.calibrated && baseHeadY > 0 && emaHeadY > 0) ? max(0, baseHeadY - emaHeadY) : 0
+        let slouchFront = slouchRatio < slouchThresh                                // head-above-shoulders drops
+        let slouchSide = sideActive && sideSeen && sideBaseDeg != nil && sideDev > config.sideSlouchMargin  // head juts forward
+        let slouchSink = headYDrop > config.headYMargin                             // whole head sinks (absolute)
+        // HYSTERESIS: flip to slouching on a clear drop, flip back only after a clear
+        // recovery on ALL signals — so it doesn't flicker good/bad right at the threshold.
+        if slouchFront || slouchSide || slouchSink { slouchState = true }
+        else if slouchRatio > slouchThresh + 0.05 && sideDev < max(0, config.sideSlouchMargin - 2)
+                && headYDrop < config.headYMargin * 0.6 { slouchState = false }
+        let slouching = present && logic.calibrated && slouchState
+        if slouching {
+            if slouchSince == 0 { slouchSince = now }
+            if now - slouchSince >= config.slouchGrace && now - lastSlouchAlert >= config.slouchCooldown {
+                lastSlouchAlert = now; wasAlerted = true
+                let why = (slouchSide && !slouchFront && !slouchSink) ? "your head's gone forward" : "you're slouching"
+                alertSound(); speak("sit up straight")
+                onAlert?("Sit up tall — \(why)", false)
+                notify("Posture — sit up tall and lengthen your spine.")
+            }
+        } else {
+            slouchSince = 0
+            if wasAlerted && slouchRatio > slouchThresh + 0.05 && sideDev < config.sideSlouchMargin {
+                wasAlerted = false; recoverSound(); onAlert?("Nice — back to good posture", true)
+            }
         }
 
         // Record the calibration baseline into the clip's sidecar — so a recorded
@@ -119,41 +183,44 @@ final class AppModel {
         // the side-cam neutral angle at the same moment so it's baseline-relative too.
         if logic.calibrated && !wasCalibrated {
             if sideSeen { sideBaseDeg = emaSideDeg }
+            baseShoulderW = shoulderW
+            baseHeadAbove = emaHeadAbove > 0 ? emaHeadAbove : (lastMP.headAbove ?? 0)
+            baseHeadY = emaHeadY > 0 ? emaHeadY : r.headY
             vision.recorder.event(["type": "calibrate",
                                    "baseHead": logic.baseHead ?? 0,
                                    "baseTilt": logic.baseTilt,
                                    "baseWidth": logic.baseWidth,
+                                   "baseShoulderW": baseShoulderW,
                                    "baseSideDeg": sideBaseDeg ?? -1])
         }
         wasCalibrated = logic.calibrated
 
+        // Score: 100 at/above your upright baseline, 0 well into a slouch — the worse
+        // of the two signals (head-drop front, head-forward side).
+        let slouchFloor = slouchThresh - 0.10
+        let frontFrac = max(0, min(1, (slouchRatio - slouchFloor) / max(0.001, 1 - slouchFloor)))
+        let sideFrac = (sideActive && sideSeen && sideBaseDeg != nil)
+            ? max(0, min(1, 1 - sideDev / (config.sideSlouchMargin + 6))) : 1
+        let headYFrac = (logic.calibrated && baseHeadY > 0) ? max(0, min(1, 1 - headYDrop / (config.headYMargin + 0.04))) : 1
+        let postureFrac = min(frontFrac, sideFrac, headYFrac)
+        let score = (present && logic.calibrated) ? Int((postureFrac * 100).rounded()) : -1
+        let status: PostureLogic.Status = !present ? .away
+            : (!logic.calibrated ? .settling : (slouching ? .slumping : .good))
+
         frames += 1
         if frames % 30 == 0 {
-            log("fused status=\(res.status) ratio=\(String(format: "%.2f", res.ratio)) tilt=\(String(format: "%.0f", tiltDeg)) mpShoulders=\(lastMP.shouldersFound) pts=\(lastMP.points.count) rec=\(vision.isRecording)")
-            vision.recorder.event(["type": "sample", "status": "\(res.status)",
-                                   "ratio": (res.ratio * 100).rounded() / 100,
-                                   "headY": (r.headY * 1000).rounded() / 1000,
-                                   "faceSize": (r.faceSize * 1000).rounded() / 1000,
-                                   "tilt": tiltDeg, "mpShoulders": lastMP.shouldersFound])
+            log("slouch ratio=\(String(format: "%.2f", slouchRatio)) headYdrop=\(String(format: "%.3f", headYDrop)) sideDev=\(String(format: "%.0f", sideDev)) front=\(slouchFront) sink=\(slouchSink) side=\(slouchSide) slouching=\(slouching) score=\(score)")
+            vision.recorder.event(["type": "sample", "status": "\(status)",
+                                   "slouchRatio": (slouchRatio * 1000).rounded() / 1000,
+                                   "headAbove": (emaHeadAbove * 1000).rounded() / 1000,
+                                   "mpShoulders": lastMP.shouldersFound])
         }
 
-        // Three dimensions, each 0..1 (1 = matches your calibrated baseline).
-        let headFrac = max(0, min(1, res.ratio))
-        let leanFrac = logic.calibrated ? max(0, 1 - abs(emaTilt - logic.baseTilt) / logic.tiltThresh) : 1
-        let distFrac = (logic.calibrated && logic.baseWidth > 0)
-            ? max(0, min(1, logic.baseWidth / max(0.0001, r.faceSize))) : 1
-        // Composite score = the weakest dimension. The side camera only counts when
-        // the LLM has confirmed it's a usable profile (sideTrusted) — otherwise a
-        // poor side view would drag the score down on noise. sideFrac is 1 when the
-        // side is absent/untrusted, so it's a no-op then.
-        let sideFrac = (sideActive && sideTrusted) ? sideForwardFrac : 1.0
-        let score = (present && logic.calibrated)
-            ? Int((min(headFrac, leanFrac, distFrac, sideFrac) * 100).rounded()) : -1
-
         onState?(State(
-            status: res.status, score: score,
-            headFrac: headFrac, leanFrac: leanFrac, distFrac: distFrac,
+            status: status, score: score,
+            headFrac: postureFrac, leanFrac: 1, distFrac: 1,
             shoulderFrac: sideForwardFrac, sideActive: sideActive, sideTrusted: sideTrusted,
+            slouchHold: (slouching && slouchSince > 0) ? (now - slouchSince) : 0, grace: config.slouchGrace,
             points: lastMP.points,
             camW: r.frameW > 0 ? r.frameW : 16, camH: r.frameH > 0 ? r.frameH : 9,
             recording: vision.isRecording,
@@ -181,8 +248,14 @@ final class AppModel {
     // LLM is confident the posture is bad. Independent of the heuristic alerts.
     func applyJudge(_ j: JudgeResult, minConfidence: Double) {
         sideTrusted = j.sideUsable
-        guard !paused, j.bad, j.confidence >= minConfidence else { return }
+        // The shoulder-tilt lean heuristic is noisy (false-fires facing forward). Let
+        // the LLM arbitrate: when it's confident you're NOT leaning, trust that over
+        // the tilt for ~2 cycles; when it confirms a lean, hand control back.
         let now = ProcessInfo.processInfo.systemUptime
+        if j.confidence >= 0.6 {
+            leanOKUntil = (j.posture == "leaning") ? 0 : now + 2 * config.judgeInterval
+        }
+        guard !paused, j.bad, j.confidence >= minConfidence else { return }
         guard now - lastJudgeAlert >= logic.cooldown else { return }
         lastJudgeAlert = now
         let close = (j.posture == "too_close")
@@ -191,7 +264,34 @@ final class AppModel {
         log("judge ALERT posture=\(j.posture) conf=\(String(format: "%.2f", j.confidence)) note=\(j.note)")
     }
 
+    // Candidate slouch metrics for the guided test harness — raw signals we'll mine
+    // to find the SINGLE simplest one that separates upright from slouch.
+    func slouchMetrics() -> [String: Any] {
+        func pt(_ k: String) -> CGPoint? { if let v = lastMP.points[k], v.1 > 0.4 { return v.0 }; return nil }
+        var m: [String: Any] = [
+            "visHeadY": (lastVision.headY * 1000).rounded() / 1000,      // Vision face midY (y up): slouch -> lower
+            "visFaceSize": (lastVision.faceSize * 1000).rounded() / 1000, // grows when you lean forward
+            "mpShoulders": lastMP.shouldersFound,
+            "mpTilt": ((lastMP.tiltDeg ?? 0) * 10).rounded() / 10,
+            "mpShoulderWidth": ((lastMP.width ?? 0) * 1000).rounded() / 1000,
+            "mpHeadAbove": ((lastMP.headAbove ?? 0) * 1000).rounded() / 1000, // (shoulderMidY-noseY)/shoulderW: slouch -> lower
+        ]
+        let nose = pt("nose"), ls = pt("leftShoulder"), rs = pt("rightShoulder")
+        if let nose { m["noseY"] = (Double(nose.y) * 1000).rounded() / 1000 }
+        if let ls, let rs {
+            let shMidY = Double(ls.y + rs.y) / 2
+            m["shoulderMidY"] = (shMidY * 1000).rounded() / 1000
+            if let nose { m["noseToShoulderY"] = ((shMidY - Double(nose.y)) * 1000).rounded() / 1000 } // head height above shoulders (MP y down)
+        }
+        if let le = pt("leftEar"), let ls { m["earToShoulderY"] = ((Double(ls.y) - Double(le.y)) * 1000).rounded() / 1000 }
+        return m
+    }
+
     private func playCue(_ name: String) { if !muted { run("/usr/bin/afplay", [cueDir + "/" + name]) } }
+    // Clearer, more noticeable alert audio (system sounds), + optional spoken nudge.
+    private func alertSound() { if !muted { run("/usr/bin/afplay", ["/System/Library/Sounds/Funk.aiff"]) } }
+    private func recoverSound() { if !muted { run("/usr/bin/afplay", ["/System/Library/Sounds/Glass.aiff"]) } }
+    private func speak(_ s: String) { if !muted && config.speakAlerts { run("/usr/bin/say", [s]) } }
     private func notify(_ msg: String) { run("/usr/bin/osascript", ["-e", "display notification \"\(msg)\" with title \"Posture\""]) }
     private func run(_ path: String, _ args: [String]) {
         let p = Process(); p.executableURL = URL(fileURLWithPath: path); p.arguments = args; try? p.run()
@@ -298,15 +398,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var recIndicator: NSTextField!
     private var blinkTimer: Timer?
     private var judgeTimer: Timer?
-    private var sideCam: SideCamera?
-    private var sidePanel: CameraPanel?
+    // Alert toast (slouch nudge) — prominent, auto-dismissing
+    private var alertBanner: NSTextField!
+    private var toastTimer: Timer?
+    // Guided test harness (on-screen prompts -> ground-truth labeled capture)
+    private var testOverlay: NSTextField!
+    private var testTimer: Timer?
+    private var testSteps: [(String, String)] = []
+    private var testIdx = 0, testT = 0, testSampleCount = 0
+    private var sideCams: [SideCamera] = []     // all side cameras (BRIO + iPhone …)
+    private var sidePanels: [CameraPanel] = []
     private var sideLabel: NSTextField!
     private var sideHint: NSTextField!
     private let placement = PlacementClient()
     private var statusColor = Palette.settling
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let rect = NSRect(x: 0, y: 0, width: 740, height: 480)
+        let rect = NSRect(x: 0, y: 0, width: 1120, height: 520)
         window = NSWindow(contentRect: rect, styleMask: [.titled, .closable, .miniaturizable],
                           backing: .buffered, defer: false)
         window.title = "Posture Monitor"; window.center()
@@ -320,36 +428,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         var panels: [CameraPanel] = [cam]
 
         sideLabel = mk("", 12, .regular, NSColor(srgbRed: 0.36, green: 0.86, blue: 1, alpha: 1))
-        sideLabel.frame = NSRect(x: 460, y: 78, width: 270, height: 16)
+        sideLabel.frame = NSRect(x: 760, y: 78, width: 330, height: 16); sideLabel.isHidden = true
         content.addSubview(sideLabel)
         sideHint = mk("", 11, .regular, Palette.warn)        // LLM camera-placement guidance
-        sideHint.frame = NSRect(x: 460, y: 56, width: 270, height: 18)
-        sideHint.maximumNumberOfLines = 2; sideHint.lineBreakMode = .byWordWrapping
+        sideHint.frame = NSRect(x: 760, y: 56, width: 330, height: 18)
+        sideHint.maximumNumberOfLines = 2; sideHint.lineBreakMode = .byWordWrapping; sideHint.isHidden = true
         content.addSubview(sideHint)
 
         if model.config.sideCamera {
-            let sc = SideCamera(); sideCam = sc
-            plog("side: enabled; device=\(sc.deviceName ?? "none") available=\(sc.available)")
-            if sc.available {
-                model.sideActive = true
-                let sp = CameraPanel(session: sc.session); sidePanel = sp
+            let devs = SideCamera.sideDevices()
+            plog("side: devices = [\(devs.map { $0.localizedName }.joined(separator: ", "))]")
+            for (idx, dev) in devs.enumerated() {
+                let sc = SideCamera(device: dev); sideCams.append(sc)
+                let sp = CameraPanel(session: sc.session); sidePanels.append(sp)
                 content.addSubview(sp); panels.append(sp)
+                let primary = (idx == 0)        // the first side drives the forward-head score
                 var sideLast = 0.0
-                sc.onFrame = { [weak self] pts, w, h, deg, present in
+                sc.onFrame = { [weak self, sp] pts, w, h, deg, present in
                     guard let self else { return }
-                    self.sidePanel?.setLandmarks(pts, color: self.statusColor, camSize: CGSize(width: w, height: h))
+                    sp.setLandmarks(pts, color: self.statusColor, camSize: CGSize(width: w, height: h))
+                    guard primary else { return }
                     let frac = self.model.feedSide(deg: deg, present: present)   // smoothed + baseline-relative
                     self.sideLabel.stringValue = present ? String(format: "Side  forward-head %.0f°", deg ?? 0) : "Side  (no person)"
                     let now = ProcessInfo.processInfo.systemUptime
-                    if now - sideLast > 3 {   // ~every 3s, don't flood
+                    if now - sideLast > 3 {
                         sideLast = now
                         plog(String(format: "side: present=%@ deg=%.0f frac=%.2f pts=%d",
                                     present ? "true" : "false", deg ?? -1, frac, pts.count))
                     }
                 }
+                sc.start()
             }
-            sc.start()
-            sideLabel.stringValue = sc.available ? "Side  starting…" : "Side  connect a 2nd camera / iPhone"
+            model.sideActive = !sideCams.isEmpty
+            sideLabel.stringValue = sideCams.isEmpty ? "Side  connect a 2nd camera / iPhone" : "Side  starting…"
         }
 
         // Once cameras have a frame, let the vision LLM diagnose the setup (works
@@ -357,7 +468,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Timer.scheduledTimer(withTimeInterval: 6, repeats: false) { [weak self] _ in self?.diagnoseSetup(showModal: false) }
 
         // lay the active panels across the camera region (no per-camera branching)
-        let region = NSRect(x: 16, y: 64, width: 420, height: 400)
+        let region = NSRect(x: 16, y: 64, width: 720, height: 440)
         let gap: CGFloat = 8
         let pw = (region.width - gap * CGFloat(panels.count - 1)) / CGFloat(panels.count)
         for (i, p) in panels.enumerated() {
@@ -368,28 +479,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         recIndicator.frame = NSRect(x: 30, y: 432, width: 90, height: 20)
         content.addSubview(recIndicator)
 
-        let rx: CGFloat = 460
-        scoreLabel = mk("--", 60, .bold, Palette.settling); scoreLabel.frame = NSRect(x: rx, y: 386, width: 260, height: 70)
-        content.addSubview(scoreLabel)
-        statusLabel = mk("Calibrating…", 19, .semibold, Palette.settling); statusLabel.frame = NSRect(x: rx, y: 352, width: 260, height: 28)
+        let rx: CGFloat = 760
+        // Minimal, calm readout: ONE clear status. No score number, no bars, no debug.
+        statusLabel = mk("Calibrating…", 34, .bold, Palette.settling)
+        statusLabel.frame = NSRect(x: rx, y: 300, width: 340, height: 130)
+        statusLabel.maximumNumberOfLines = 3
         content.addSubview(statusLabel)
-
-        // The side camera adds a "Shoulders" dimension (forward-head / rounded
-        // shoulders) — the axis a front camera can't see.
-        var y: CGFloat = 300
-        let dims = ["Head height", "Lean", "Distance"] + (model.sideActive ? ["Shoulders"] : [])
-        for name in dims {
-            let l = mk(name, 12, .regular, Palette.textMuted); l.frame = NSRect(x: rx, y: y, width: 260, height: 16)
-            content.addSubview(l)
-            let bar = BarView(frame: NSRect(x: rx, y: y - 16, width: 250, height: 10))
-            content.addSubview(bar); bars[name] = bar
-            y -= 45
-        }
-
-        visLabel = mk("Vision …", 11, .regular, Palette.textMuted); visLabel.frame = NSRect(x: rx, y: 120, width: 270, height: 16)
-        content.addSubview(visLabel)
-        mpLabel = mk("MediaPipe …", 11, .regular, NSColor(srgbRed: 0.36, green: 0.86, blue: 1, alpha: 1)); mpLabel.frame = NSRect(x: rx, y: 100, width: 270, height: 16)
-        content.addSubview(mpLabel)
+        // Kept (so render references stay valid) but hidden — UI is intentionally bare.
+        scoreLabel = mk("", 1, .regular, Palette.settling); scoreLabel.isHidden = true
+        visLabel = mk("", 1, .regular, Palette.textMuted); visLabel.isHidden = true
+        mpLabel = mk("", 1, .regular, Palette.textMuted); mpLabel.isHidden = true
 
         // controls
         let cal = NSButton(title: "Calibrate", target: self, action: #selector(calibrate))
@@ -407,17 +506,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mute.frame = NSRect(x: 312, y: 20, width: 64, height: 22); content.addSubview(mute)
         let calLbl = mk("sensitivity", 11, .regular, Palette.textMuted)
         calLbl.frame = NSRect(x: 392, y: 20, width: 70, height: 18); content.addSubview(calLbl)
-        let sens = NSSlider(value: model.config.sensitivity, minValue: 0.70, maxValue: 0.95, target: self, action: #selector(sens(_:)))
+        // Left = less sensitive (alert only on bigger slouches), right = more sensitive.
+        let sens = NSSlider(value: model.slouchThresh, minValue: 0.75, maxValue: 0.95, target: self, action: #selector(sens(_:)))
         sens.frame = NSRect(x: 464, y: 20, width: 150, height: 22); content.addSubview(sens)
         // Vision-LLM setup diagnosis — looks at front (+ side) and explains the setup.
         let diag = NSButton(title: "🔍 Diagnose", target: self, action: #selector(diagnose))
         diag.frame = NSRect(x: 624, y: 16, width: 108, height: 30); diag.bezelStyle = .rounded
         content.addSubview(diag)
+        // Guided test — prompts you through postures and captures ground-truth labels.
+        let test = NSButton(title: "🎯 Test", target: self, action: #selector(startTest))
+        test.frame = NSRect(x: 740, y: 16, width: 90, height: 30); test.bezelStyle = .rounded
+        content.addSubview(test)
+
+        // Big prompt banner used during the guided test (hidden otherwise).
+        testOverlay = mk("", 17, .bold, .white)
+        testOverlay.alignment = .center
+        testOverlay.maximumNumberOfLines = 2
+        testOverlay.drawsBackground = true
+        testOverlay.backgroundColor = NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.82)
+        testOverlay.frame = NSRect(x: 16, y: 456, width: 1088, height: 48)   // thin top band (over panels' empty top)
+        testOverlay.isHidden = true
+        content.addSubview(testOverlay)
+
+        // Slouch-alert toast — big, centered, auto-dismissing.
+        alertBanner = mk("", 26, .bold, .white)
+        alertBanner.alignment = .center
+        alertBanner.drawsBackground = true
+        alertBanner.frame = NSRect(x: 120, y: 250, width: 520, height: 60)
+        alertBanner.wantsLayer = true; alertBanner.layer?.cornerRadius = 12
+        alertBanner.isHidden = true
+        content.addSubview(alertBanner)
 
         window.contentView = content
         window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         model.onState = { [weak self] s in self?.render(s) }
         model.onCameraDenied = { [weak self] in self?.cameraDenied() }
+        model.onAlert = { [weak self] msg, good in self?.showToast(msg, good: good) }
         model.start()
 
         // blink the REC dot while recording
@@ -437,7 +561,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // Capture current front (+ side) frames and ask the LLM to judge posture.
     private func runJudge() {
         guard let front = model.vision.lastJPEG else { return }
-        let side = sideCam?.lastJPEG
+        let side = sideCams.first?.lastJPEG
+        let metrics = model.lastMetrics      // the algorithm's call at this instant
         placement.judge(front: front, side: side) { [weak self] j in
             guard let self, let j else { return }
             self.model.applyJudge(j, minConfidence: self.model.config.judgeConfidence)
@@ -446,21 +571,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.sideHint.stringValue = (j.sideUsable ? "✓ side counts · " : "⚠︎ side not counted · ") + (j.note.isEmpty ? j.posture : j.note)
                 self.sideHint.textColor = j.sideUsable ? Palette.good : Palette.warn
             }
+            self.saveLoopSample(front: front, side: side, metrics: metrics, judge: j)
+        }
+    }
+
+    // SELF-TUNING LOOP (data half): every judge pairs the algorithm's metrics +
+    // call with the LLM's vision ground-truth, appended to a dataset selfloop.py
+    // optimizes against. The app generates labeled training data continuously.
+    private func saveLoopSample(front: Data, side: Data?, metrics: [String: Any], judge j: JudgeResult) {
+        guard !metrics.isEmpty else { return }   // only when calibrated + present
+        let dir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Movies/PostureMonitor/loop")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let f = DateFormatter(); f.dateFormat = "yyyyMMdd-HHmmss"
+        let stamp = f.string(from: Date())
+        try? front.write(to: dir.appendingPathComponent("front_\(stamp).jpg"))
+        if let side { try? side.write(to: dir.appendingPathComponent("side_\(stamp).jpg")) }
+        var row: [String: Any] = metrics
+        row["t"] = stamp
+        row["llm_posture"] = j.posture; row["llm_confidence"] = j.confidence
+        row["llm_side_usable"] = j.sideUsable; row["llm_note"] = j.note
+        if let d = try? JSONSerialization.data(withJSONObject: row),
+           let line = String(data: d, encoding: .utf8)?.appending("\n"),
+           let bytes = line.data(using: .utf8) {
+            let url = dir.appendingPathComponent("dataset.jsonl")
+            if let fh = try? FileHandle(forWritingTo: url) { fh.seekToEndOfFile(); fh.write(bytes); try? fh.close() }
+            else { try? bytes.write(to: url) }
         }
     }
 
     private func render(_ s: AppModel.State) {
         let c = Palette.color(s.status); statusColor = c
         cam.setLandmarks(s.points, color: c, camSize: CGSize(width: s.camW, height: s.camH))
-        scoreLabel.stringValue = s.score < 0 ? "--" : "\(s.score)"; scoreLabel.textColor = c
-        statusLabel.stringValue = Palette.label(s.status); statusLabel.textColor = c
-        bars["Head height"]?.frac = CGFloat(s.headFrac); bars["Head height"]?.color = c
-        bars["Lean"]?.frac = CGFloat(s.leanFrac); bars["Lean"]?.color = c
-        bars["Distance"]?.frac = CGFloat(s.distFrac); bars["Distance"]?.color = c
-        // Shoulders is muted gray when the side view isn't trusted (shown, not counted).
-        bars["Shoulders"]?.frac = CGFloat(s.shoulderFrac)
-        bars["Shoulders"]?.color = s.sideTrusted ? c : Palette.textMuted
-        visLabel.stringValue = s.visionText; mpLabel.stringValue = s.mpText
+        // ONE calm readout. Good ✓ / countdown / SIT UP — nothing else.
+        if s.slouchHold > 0 {
+            let left = Int(ceil(max(0, s.grace - s.slouchHold)))
+            statusLabel.stringValue = left > 0 ? "Slouching\nsit up in \(left)s" : "SLOUCHING\nsit up!"
+            statusLabel.textColor = left > 0 ? Palette.warn : Palette.alert
+        } else if s.status == .good {
+            statusLabel.stringValue = "Good posture ✓"; statusLabel.textColor = Palette.good
+        } else {
+            statusLabel.stringValue = Palette.label(s.status); statusLabel.textColor = c
+        }
         recIndicator.isHidden = !s.recording
     }
 
@@ -470,6 +622,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         a.addButton(withTitle: "Open Settings"); a.addButton(withTitle: "OK")
         if a.runModal() == .alertFirstButtonReturn {
             NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera")!)
+        }
+    }
+
+    // Big auto-dismissing slouch toast (red) / recovery toast (green).
+    private func showToast(_ msg: String, good: Bool) {
+        alertBanner.stringValue = "  \(msg)  "
+        alertBanner.layer?.backgroundColor = (good ? Palette.good : Palette.alert).withAlphaComponent(0.95).cgColor
+        alertBanner.isHidden = false
+        toastTimer?.invalidate()
+        toastTimer = Timer.scheduledTimer(withTimeInterval: good ? 2.5 : 5.0, repeats: false) { [weak self] _ in
+            self?.alertBanner.isHidden = true
         }
     }
 
@@ -484,6 +647,76 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     @objc private func calibrate() { model.recalibrate(); diagnoseSetup(showModal: false) }
+
+    // GUIDED TEST: walk the user through prompted postures; each "HOLD" second
+    // captures all candidate metrics + frames from every camera, labeled by the
+    // prompt (ground truth). labeled_analyze.py then finds the simplest slouch metric.
+    @objc private func startTest() {
+        if testTimer != nil {                       // already running -> cancel
+            testTimer?.invalidate(); testTimer = nil
+            testOverlay.stringValue = "Test cancelled"
+            plog("TEST cancelled")
+            Timer.scheduledTimer(withTimeInterval: 1.5, repeats: false) { [weak self] _ in self?.testOverlay.isHidden = true }
+            return
+        }
+        testSteps = [
+            ("Sit up TALL — best posture", "good"),
+            ("FORWARD HEAD — head forward, eyes UP", "forward_head"),
+            ("Sit up TALL", "good"),
+            ("LOOK DOWN — back stays straight", "look_down"),
+            ("Sit up TALL", "good"),
+            ("SLOUCH — round your whole back", "slouch"),
+            ("FORWARD HEAD — head forward, eyes UP", "forward_head"),
+            ("Sit up TALL", "good"),
+        ]
+        testIdx = 0; testT = 0; testSampleCount = 0
+        plog("TEST started")
+        testOverlay.isHidden = false
+        testTimer?.invalidate()
+        testTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.tickTest() }
+        tickTest()
+    }
+
+    private func tickTest() {
+        guard testIdx < testSteps.count else { endTest(); return }
+        let (prompt, label) = testSteps[testIdx]
+        let stepLen = 6                       // 2s get-ready + 4s hold/capture
+        if testT < 2 {
+            testOverlay.stringValue = "GET READY (\(2 - testT))…\n\(prompt)"
+        } else {
+            testOverlay.stringValue = "HOLD \(stepLen - testT)s\n\(prompt)"
+            captureLabeled(label)
+        }
+        testT += 1
+        if testT >= stepLen { testIdx += 1; testT = 0 }
+    }
+
+    private func endTest() {
+        testTimer?.invalidate(); testTimer = nil
+        testOverlay.stringValue = "✅ Test complete — \(testSampleCount) samples saved"
+        plog("TEST complete: \(testSampleCount) samples -> ~/Movies/PostureMonitor/labeled/")
+        Timer.scheduledTimer(withTimeInterval: 3, repeats: false) { [weak self] _ in self?.testOverlay.isHidden = true }
+    }
+
+    private func captureLabeled(_ label: String) {
+        let m = model.slouchMetrics()
+        let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Movies/PostureMonitor/labeled")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let f = DateFormatter(); f.dateFormat = "yyyyMMdd-HHmmss-SSS"; let stamp = f.string(from: Date())
+        if let front = model.vision.lastJPEG { try? front.write(to: dir.appendingPathComponent("front_\(label)_\(stamp).jpg")) }
+        for (i, sc) in sideCams.enumerated() {
+            if let d = sc.lastJPEG { try? d.write(to: dir.appendingPathComponent("side\(i)_\(label)_\(stamp).jpg")) }
+        }
+        var row = m; row["label"] = label; row["t"] = stamp
+        if let d = try? JSONSerialization.data(withJSONObject: row),
+           let line = String(data: d, encoding: .utf8)?.appending("\n"),
+           let b = line.data(using: .utf8) {
+            let url = dir.appendingPathComponent("dataset.jsonl")
+            if let fh = try? FileHandle(forWritingTo: url) { fh.seekToEndOfFile(); fh.write(b); try? fh.close() }
+            else { try? b.write(to: url) }
+        }
+        testSampleCount += 1
+    }
     @objc private func diagnose() { diagnoseSetup(showModal: true) }
 
     // Vision-LLM setup diagnosis: send the front (+ side) frame and let the LLM
@@ -496,7 +729,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if showModal { simpleAlert("No camera frame yet", "Grant camera access and wait a moment, then try again.") }
             return
         }
-        let side = sideCam?.lastJPEG
+        let side = sideCams.first?.lastJPEG
         sideHint.stringValue = "Diagnosing setup with vision AI…"; sideHint.textColor = Palette.textMuted
         placement.assess(front: front, side: side) { [weak self] a in
             guard let self else { return }
@@ -540,7 +773,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     @objc private func togglePause() { model.paused.toggle(); pauseButton.title = model.paused ? "Resume" : "Pause" }
     @objc private func toggleMute(_ b: NSButton) { model.muted = (b.state == .on) }
-    @objc private func sens(_ s: NSSlider) { model.logic.sensitivity = s.doubleValue }
+    @objc private func sens(_ s: NSSlider) { model.slouchThresh = s.doubleValue; plog("sensitivity -> slouchThresh=\(String(format: "%.2f", s.doubleValue))") }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 }
 

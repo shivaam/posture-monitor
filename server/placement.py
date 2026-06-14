@@ -13,19 +13,26 @@ import json
 import os
 import re
 
-import anthropic
-
 MODEL = os.environ.get("POSTURE_VISION_MODEL", "claude-sonnet-4-20250514")
 
 _client = None
 
 
 def client():
+    """The OPTIONAL vision-LLM client. The core posture detector needs none of this;
+    these endpoints only work if you configure an Anthropic key (or a local proxy).
+    `anthropic` is imported lazily so the server runs fine without it installed."""
     global _client
     if _client is None:
-        # Local Anthropic proxy — ambient ANTHROPIC_* env is ignored on purpose
-        # (it would hijack the dummy key). Edit here to use the real API.
-        _client = anthropic.Anthropic(api_key="local-test", base_url="http://localhost:42069/v1")
+        import anthropic  # lazy — not required for the core /posture endpoint
+        key = os.environ.get("ANTHROPIC_API_KEY")
+        base = os.environ.get("POSTURE_LLM_BASE")  # optional self-hosted proxy
+        if base:
+            _client = anthropic.Anthropic(api_key=key or "local-test", base_url=base)
+        elif key:
+            _client = anthropic.Anthropic()        # standard Anthropic API
+        else:
+            raise RuntimeError("vision-LLM not configured — set ANTHROPIC_API_KEY (optional feature)")
     return _client
 
 

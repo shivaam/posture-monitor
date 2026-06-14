@@ -149,7 +149,7 @@ final class VisionEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         let now = ProcessInfo.processInfo.systemUptime
         // Forward a downsized JPEG to MediaPipe as fast as it keeps up (~5 fps;
         // requests drop while one is in flight) for smoother live pointers.
-        if now - lastJPEGTime > 0.18, let data = jpeg(from: sampleBuffer, maxDim: 320) {
+        if now - lastJPEGTime > 0.18, let data = jpeg(from: sampleBuffer, maxDim: 720) {
             lastJPEGTime = now
             lastJPEG = data
             DispatchQueue.main.async { self.onFrameJPEG?(data) }
@@ -179,7 +179,7 @@ final class VisionEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         let scaled = ci.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
         guard let cg = ciContext.createCGImage(scaled, from: scaled.extent) else { return nil }
         let rep = NSBitmapImageRep(cgImage: cg)
-        return rep.representation(using: .jpeg, properties: [.compressionFactor: 0.5])
+        return rep.representation(using: .jpeg, properties: [.compressionFactor: 0.8])
     }
 }
 

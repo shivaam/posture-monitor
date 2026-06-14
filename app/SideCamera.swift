@@ -25,20 +25,24 @@ final class SideCamera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     var onFrame: ((_ points: [String: (CGPoint, Double)], _ camW: Double, _ camH: Double,
                    _ forwardHeadDeg: Double?, _ present: Bool) -> Void)?
 
-    // Discover the side device EAGERLY (at construction) so `available`/`deviceName`
-    // are known before the UI decides whether to wire a panel. Prefer a non-built-in
-    // camera — the built-in FaceTime cam is the front view; a USB webcam or iPhone
-    // Continuity Camera shows up as .external/.continuityCamera.
-    override init() {
+    // All non-built-in cameras (USB webcams + iPhone Continuity), in enumeration
+    // order — each becomes its own side panel so we can use ALL cameras at once.
+    static func sideDevices() -> [AVCaptureDevice] {
         let ds = AVCaptureDevice.DiscoverySession(
             deviceTypes: [.external, .continuityCamera, .builtInWideAngleCamera],
             mediaType: .video, position: .unspecified)
-        let dev = ds.devices.first(where: { $0.deviceType == .external || $0.deviceType == .continuityCamera })
+        // Continuity (iPhone) FIRST — it gives the cleaner side profile, so it drives
+        // the forward-head signal; other webcams follow as extra display panels.
+        return ds.devices
+            .filter { $0.deviceType == .external || $0.deviceType == .continuityCamera }
+            .sorted { ($0.deviceType == .continuityCamera ? 0 : 1) < ($1.deviceType == .continuityCamera ? 0 : 1) }
+    }
+
+    init(device dev: AVCaptureDevice) {
         device = dev
         super.init()
-        plog("side: discovery saw [\(ds.devices.map { "\($0.localizedName)(\($0.deviceType.rawValue))" }.joined(separator: ", "))]")
-        available = (dev != nil)
-        deviceName = dev?.localizedName
+        available = true
+        deviceName = dev.localizedName
     }
 
     func start() {
@@ -62,10 +66,10 @@ final class SideCamera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
         guard let pb = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         lastSize = (Double(CVPixelBufferGetWidth(pb)), Double(CVPixelBufferGetHeight(pb)))
         let ci = CIImage(cvPixelBuffer: pb)
-        let scale = min(1, 320 / max(ci.extent.width, ci.extent.height))
+        let scale = min(1, 720 / max(ci.extent.width, ci.extent.height))
         let scaled = ci.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
         guard let cg = ciContext.createCGImage(scaled, from: scaled.extent) else { return }
-        if let d = NSBitmapImageRep(cgImage: cg).representation(using: .jpeg, properties: [.compressionFactor: 0.5]) {
+        if let d = NSBitmapImageRep(cgImage: cg).representation(using: .jpeg, properties: [.compressionFactor: 0.8]) {
             lastJPEG = d
             mp.send(d)
         }

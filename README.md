@@ -1,57 +1,76 @@
 # PostureMonitor
 
-A native macOS posture monitor that watches you while you work and nudges you
-when you slump or lean into the screen. **All local — your video never leaves
-the Mac.**
+A native macOS app that watches you through your laptop cameras and **nudges you when you slouch** — no wearable, no cloud. All processing is on-device; your video never leaves the Mac.
 
-It fuses two pose engines:
+![demo](docs/demo.gif)
 
-- **Apple Vision** (in the app, ~8 fps, no dependencies) — face position/size for
-  fast, always-on tracking. Works with the server off.
-- **MediaPipe** (a small local Python server) — real shoulder landmarks, which a
-  laptop webcam's head-and-shoulders crop gives Apple Vision trouble with.
+*Green = sitting tall. Red = slouching → sit up. Two camera angles, live skeleton tracking, a gentle nudge after you've held a slouch for a few seconds.*
 
-The app draws the live MediaPipe skeleton over your camera and shows a posture
-score, status, and Head/Lean/Distance bars. A descending tone nudges you on a
-sustained slump; a rising chime when you recover. Calibrate-free (it learns your
-baseline) and pauses when you step away.
+---
+
+## What it does
+
+- Learns your **upright baseline** when you calibrate, then watches for drift.
+- Detects a slouch from **three independent signals**, so it catches the different ways people slump:
+  | signal | catches | how |
+  |---|---|---|
+  | head drops vs shoulders | leaning your head down/forward | MediaPipe nose vs shoulders |
+  | whole body sinks | slumping straight down | Apple Vision absolute head height |
+  | head juts forward | forward-head posture (eyes still up) | side camera: ear ahead of shoulder |
+- Only nudges on a **sustained** slouch (grace period), with **hysteresis** so it doesn't flicker — a quick glance down won't nag you.
+- A calm readout: **"Good posture ✓"** or **"Slouching — sit up in 5s…"** counting down, plus a sound and an optional spoken reminder.
+- Live MediaPipe skeleton drawn over each camera.
+
+**Cameras:** the built-in webcam is enough. A **second camera** (an iPhone via Continuity Camera, or any USB webcam at ~45° to your side) adds forward-head detection — the posture problem a front camera can't see.
+
+## Quick start
+
+Requirements: **macOS**, **Xcode command-line tools** (`xcode-select --install`), and **Python 3.9–3.12** (for the pose server; `brew install python@3.12` if needed).
+
+```bash
+git clone <your-repo-url> posture-monitor
+cd posture-monitor
+./start.sh        # first run builds the app + sets up the server (~2 min), then launches
+```
+
+Then **sit up tall and click "Calibrate"** (or wait ~6s for auto-calibration). That's your baseline — slouch from there and it'll nudge you.
+
+Run it any time with `./start.sh`. (Tip: `alias posture='/full/path/to/posture-monitor/start.sh'` in your `~/.zshrc`.)
+
+## How it works
 
 ```
 posture-monitor/
-  app/      # native macOS app (Swift, AppKit + Vision) — built with build.sh
-  server/   # MediaPipe pose server (FastAPI) the app talks to on localhost:8000
+  app/      native macOS app (Swift, AppKit + Apple Vision) — built by app/build.sh
+  server/   MediaPipe pose server (FastAPI) — run.sh sets up a venv + model itself
+  start.sh  one command: starts the server, builds (first run) + opens the app
 ```
 
-## Run it
+- The **app** owns the cameras, runs Apple Vision (face position) every frame, and POSTs downscaled frames to the local **server** for MediaPipe pose landmarks (shoulders, ears). It fuses both into the three slouch signals above.
+- The server runs on `127.0.0.1:8077` (localhost only). It downloads the MediaPipe model on first run.
 
-**1. Server (for the MediaPipe shoulder tracking):**
-```bash
-cd server
-python3 -m venv ../.venv
-../.venv/bin/pip install -r requirements.txt
-# one-time: download the pose model into server/
-curl -L -o pose_landmarker_heavy.task \
-  https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/latest/pose_landmarker_heavy.task
-./run.sh
+**Tuning** — drag the in-app sensitivity slider, or edit `~/.posturemonitor.json`:
+
+```jsonc
+{
+  "slouchThresh": 0.87,      // head-drop ratio that counts as slouching (lower = less sensitive)
+  "headYMargin": 0.05,       // absolute head-sink that counts as slouching
+  "sideSlouchMargin": 6,     // degrees of forward-head that counts as slouching
+  "slouchGrace": 8,          // seconds of slouch before it nudges
+  "slouchCooldown": 45,      // min seconds between nudges
+  "speakAlerts": false,      // also say "sit up straight" out loud
+  "sideCamera": true         // use a second camera for forward-head
+}
 ```
 
-**2. App:**
-```bash
-cd app
-./build.sh          # compiles + bundles + ad-hoc signs PostureMonitor.app
-open PostureMonitor.app
-```
-Allow the camera prompt on first run. Sit how you want to hold posture; it
-auto-calibrates after a few still seconds (or click **Calibrate**).
+## Privacy
 
-The app works **without the server** (Apple Vision only — head height + distance);
-start the server to add the MediaPipe skeleton + shoulder-based detection.
+Everything runs locally — Apple Vision in-app, MediaPipe in a localhost server. **No video, frames, or data ever leave your machine.** An optional vision-LLM feature (camera-setup coaching) is **off by default** and only runs if you set an `ANTHROPIC_API_KEY`.
 
-## Notes / roadmap
+## How we got here
 
-- Front camera can't see front-to-back **rounded shoulders** (that's depth). A
-  future **iPhone side-camera companion** (Continuity Camera) would add a side
-  profile for true forward-head/rounding.
-- To ship as a single binary, MediaPipe would need to run on-device (CocoaPods)
-  instead of via the local server. Today it's app + local server.
-- Logs to `/tmp/posture-monitor.log` for tuning thresholds.
+This wasn't obvious — we tried a lot, measured everything, and most of our strong intuitions were wrong (the "lean" signal turned out to be noise; one signal beat a four-signal fusion; a vision-LLM judge only hit ~65%). The full experiment log, data, and stats are in **[TECHNICAL.md](TECHNICAL.md)**.
+
+## License
+
+MIT (see LICENSE).
