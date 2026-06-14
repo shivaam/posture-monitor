@@ -13,7 +13,8 @@ func plog(_ s: String) {
 
 struct UIState {
     var palette: Palette
-    var detail: String
+    var title: String       // the pill text
+    var subtitle: String    // the calm secondary line (countdown / hint)
 }
 
 // MARK: - Model (detection + alerts)
@@ -67,12 +68,12 @@ final class AppModel {
         let slouching = present && logic.calibrated && slouchState
         let now = ProcessInfo.processInfo.systemUptime
 
-        var detail = ""
+        var subtitle = ""
         if slouching {
             if slouchSince == nil { slouchSince = now }
             let held = now - (slouchSince ?? now)
             let left = max(0, config.slouchGrace - held)
-            detail = left > 0 ? String(format: "sit up in %.0fs…", left) : "sit up"
+            subtitle = left > 0 ? String(format: "sit up in %.0fs…", left) : "sit up straight"
             if held >= config.slouchGrace && now - lastAlert > config.slouchCooldown {
                 lastAlert = now
                 alert()
@@ -87,8 +88,13 @@ final class AppModel {
         else if slouching { palette = .slouching }
         else { palette = .good }
 
-        let text = paused ? "Paused" : (detail.isEmpty ? palette.label : "\(palette.label) — \(detail)")
-        onUpdate?(UIState(palette: palette, detail: text))
+        if paused {
+            onUpdate?(UIState(palette: .away, title: "Paused", subtitle: "monitoring is off"))
+        } else {
+            if palette == .good && subtitle.isEmpty { subtitle = "keep it up" }
+            if palette == .away { subtitle = "step into view to begin" }
+            onUpdate?(UIState(palette: palette, title: palette.label, subtitle: subtitle))
+        }
         _ = status
     }
 
@@ -103,9 +109,50 @@ final class AppModel {
     }
 }
 
+// MARK: - Status pill (tinted capsule with an icon)
+
+final class PillView: NSView {
+    private let icon = NSImageView()
+    private let label = NSTextField(labelWithString: "")
+
+    init() {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 18
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        icon.imageScaling = .scaleProportionallyUpOrDown
+        label.font = .systemFont(ofSize: 15, weight: .semibold)
+        let stack = NSStackView(views: [icon, label])
+        stack.spacing = 8
+        stack.alignment = .centerY
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(equalToConstant: 36),
+            stack.centerYAnchor.constraint(equalTo: centerYAnchor),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            icon.widthAnchor.constraint(equalToConstant: 18),
+            icon.heightAnchor.constraint(equalToConstant: 18),
+        ])
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    func set(_ p: Palette, _ text: String) {
+        layer?.backgroundColor = p.color.withAlphaComponent(0.16).cgColor
+        label.stringValue = text
+        label.textColor = p.ink
+        let img = NSImage(systemSymbolName: p.symbol, accessibilityDescription: text)
+        img?.isTemplate = true
+        icon.image = img
+        icon.contentTintColor = p.ink
+    }
+}
+
 // MARK: - Camera panel (preview + face box + status border)
 
 final class CameraPanel: NSView {
+    private let container = CALayer()
     private let preview: AVCaptureVideoPreviewLayer
     private let box = CAShapeLayer()
 
@@ -113,29 +160,40 @@ final class CameraPanel: NSView {
         preview = AVCaptureVideoPreviewLayer(session: session)
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.backgroundColor = NSColor.black.cgColor
-        layer?.cornerRadius = 10
-        layer?.borderWidth = 4
-        layer?.borderColor = Palette.away.color.cgColor
+        layer?.masksToBounds = false
+        // Soft drop shadow on the outer layer (kept un-clipped).
+        layer?.shadowColor = NSColor.black.cgColor
+        layer?.shadowOpacity = 0.22
+        layer?.shadowRadius = 14
+        layer?.shadowOffset = CGSize(width: 0, height: -3)
+
+        container.cornerRadius = 14
+        container.masksToBounds = true
+        container.backgroundColor = NSColor.black.cgColor
+        container.borderWidth = 4
+        container.borderColor = Palette.away.color.cgColor
+        layer?.addSublayer(container)
+
         preview.videoGravity = .resizeAspectFill
-        preview.cornerRadius = 10
-        layer?.addSublayer(preview)
+        container.addSublayer(preview)
+
         box.fillColor = NSColor.clear.cgColor
-        box.lineWidth = 2
+        box.lineWidth = 2.5
         box.strokeColor = NSColor.systemGreen.cgColor
-        layer?.addSublayer(box)
+        container.addSublayer(box)
     }
     required init?(coder: NSCoder) { fatalError() }
 
     override func layout() {
         super.layout()
         CATransaction.begin(); CATransaction.setDisableActions(true)
+        container.frame = bounds
         preview.frame = bounds
         CATransaction.commit()
     }
 
     func setState(_ p: Palette) {
-        layer?.borderColor = p.color.cgColor
+        container.borderColor = p.color.cgColor
         box.strokeColor = p.color.cgColor
     }
 
@@ -146,7 +204,7 @@ final class CameraPanel: NSView {
             let meta = CGRect(x: r.faceRect.minX, y: 1 - r.faceRect.maxY,
                               width: r.faceRect.width, height: r.faceRect.height)
             let rect = preview.layerRectConverted(fromMetadataOutputRect: meta)
-            box.path = CGPath(roundedRect: rect, cornerWidth: 6, cornerHeight: 6, transform: nil)
+            box.path = CGPath(roundedRect: rect, cornerWidth: 8, cornerHeight: 8, transform: nil)
             box.isHidden = false
         } else {
             box.isHidden = true
@@ -161,72 +219,90 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let model = AppModel()
     var window: NSWindow!
     var panel: CameraPanel!
-    var statusLabel: NSTextField!
+    var pill: PillView!
+    var subtitle: NSTextField!
 
     func applicationDidFinishLaunching(_ note: Notification) {
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 520),
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 580),
                          styleMask: [.titled, .closable, .miniaturizable],
                          backing: .buffered, defer: false)
         w.title = "PostureMonitor"
+        w.titlebarAppearsTransparent = true
         w.center()
         window = w
 
-        let root = NSView(frame: w.contentView!.bounds)
-        root.autoresizingMask = [.width, .height]
-        w.contentView = root
+        // Vibrancy background.
+        let bg = NSVisualEffectView(frame: w.contentView!.bounds)
+        bg.autoresizingMask = [.width, .height]
+        bg.material = .windowBackground
+        bg.blendingMode = .behindWindow
+        bg.state = .active
+        w.contentView = bg
 
         panel = CameraPanel(session: model.vision.session)
         panel.translatesAutoresizingMaskIntoConstraints = false
-        root.addSubview(panel)
+        bg.addSubview(panel)
 
-        statusLabel = NSTextField(labelWithString: "Starting…")
-        statusLabel.font = .systemFont(ofSize: 15, weight: .semibold)
-        statusLabel.alignment = .center
-        statusLabel.translatesAutoresizingMaskIntoConstraints = false
-        root.addSubview(statusLabel)
+        pill = PillView()
+        pill.translatesAutoresizingMaskIntoConstraints = false
+        bg.addSubview(pill)
 
-        let calibrate = NSButton(title: "Calibrate", target: self, action: #selector(calibrate))
-        let pause = NSButton(title: "Pause", target: self, action: #selector(togglePause))
-        let mute = NSButton(title: "Mute", target: self, action: #selector(toggleMute))
-        let help = NSButton(title: "Help", target: self, action: #selector(showHelp))
-        for b in [calibrate, pause, mute, help] { b.bezelStyle = .rounded }
-        let buttons = NSStackView(views: [calibrate, pause, mute, help])
-        buttons.spacing = 8
-        buttons.translatesAutoresizingMaskIntoConstraints = false
-        root.addSubview(buttons)
+        subtitle = NSTextField(labelWithString: " ")
+        subtitle.font = .systemFont(ofSize: 12)
+        subtitle.textColor = .secondaryLabelColor
+        subtitle.alignment = .center
+        subtitle.translatesAutoresizingMaskIntoConstraints = false
+        bg.addSubview(subtitle)
 
+        // Sensitivity row: "Less ── More".
+        let less = caption("Less")
+        let more = caption("More")
         let sens = NSSlider(value: model.slouchThresh, minValue: 0.80, maxValue: 0.97,
                             target: self, action: #selector(sensChanged(_:)))
         sens.translatesAutoresizingMaskIntoConstraints = false
-        let sensLabel = NSTextField(labelWithString: "Sensitivity")
-        sensLabel.font = .systemFont(ofSize: 11)
-        sensLabel.textColor = .secondaryLabelColor
-        let sensRow = NSStackView(views: [sensLabel, sens])
+        sens.controlSize = .small
+        let sensRow = NSStackView(views: [less, sens, more])
         sensRow.spacing = 8
+        sensRow.alignment = .centerY
         sensRow.translatesAutoresizingMaskIntoConstraints = false
-        root.addSubview(sensRow)
+        bg.addSubview(sensRow)
+
+        // Toolbar buttons with SF Symbols.
+        let calibrate = toolButton("Calibrate", "arrow.clockwise", #selector(calibrate))
+        let pause = toolButton("Pause", "pause.fill", #selector(togglePause))
+        let mute = toolButton("Mute", "speaker.slash.fill", #selector(toggleMute))
+        let help = toolButton("Help", "questionmark.circle", #selector(showHelp))
+        let buttons = NSStackView(views: [calibrate, pause, mute, help])
+        buttons.spacing = 8
+        buttons.distribution = .fillEqually
+        buttons.translatesAutoresizingMaskIntoConstraints = false
+        bg.addSubview(buttons)
 
         NSLayoutConstraint.activate([
-            panel.topAnchor.constraint(equalTo: root.topAnchor, constant: 16),
-            panel.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
-            panel.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
+            panel.topAnchor.constraint(equalTo: bg.topAnchor, constant: 38),
+            panel.leadingAnchor.constraint(equalTo: bg.leadingAnchor, constant: 20),
+            panel.trailingAnchor.constraint(equalTo: bg.trailingAnchor, constant: -20),
             panel.heightAnchor.constraint(equalTo: panel.widthAnchor, multiplier: 0.75),
 
-            statusLabel.topAnchor.constraint(equalTo: panel.bottomAnchor, constant: 14),
-            statusLabel.centerXAnchor.constraint(equalTo: root.centerXAnchor),
+            pill.topAnchor.constraint(equalTo: panel.bottomAnchor, constant: 18),
+            pill.centerXAnchor.constraint(equalTo: bg.centerXAnchor),
 
-            sensRow.topAnchor.constraint(equalTo: statusLabel.bottomAnchor, constant: 14),
-            sensRow.centerXAnchor.constraint(equalTo: root.centerXAnchor),
-            sens.widthAnchor.constraint(equalToConstant: 220),
+            subtitle.topAnchor.constraint(equalTo: pill.bottomAnchor, constant: 8),
+            subtitle.centerXAnchor.constraint(equalTo: bg.centerXAnchor),
 
-            buttons.topAnchor.constraint(equalTo: sensRow.bottomAnchor, constant: 14),
-            buttons.centerXAnchor.constraint(equalTo: root.centerXAnchor),
-            buttons.bottomAnchor.constraint(lessThanOrEqualTo: root.bottomAnchor, constant: -16),
+            sensRow.topAnchor.constraint(equalTo: subtitle.bottomAnchor, constant: 18),
+            sensRow.centerXAnchor.constraint(equalTo: bg.centerXAnchor),
+            sens.widthAnchor.constraint(equalToConstant: 200),
+
+            buttons.topAnchor.constraint(equalTo: sensRow.bottomAnchor, constant: 16),
+            buttons.leadingAnchor.constraint(equalTo: bg.leadingAnchor, constant: 20),
+            buttons.trailingAnchor.constraint(equalTo: bg.trailingAnchor, constant: -20),
+            buttons.bottomAnchor.constraint(lessThanOrEqualTo: bg.bottomAnchor, constant: -20),
         ])
 
         model.onUpdate = { [weak self] s in
-            self?.statusLabel.stringValue = s.detail
-            self?.statusLabel.textColor = s.palette.color
+            self?.pill.set(s.palette, s.title)
+            self?.subtitle.stringValue = s.subtitle.isEmpty ? " " : s.subtitle
             self?.panel.setState(s.palette)
         }
         model.onFace = { [weak self] r in self?.panel.setFace(r) }
@@ -237,9 +313,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    private func caption(_ s: String) -> NSTextField {
+        let t = NSTextField(labelWithString: s)
+        t.font = .systemFont(ofSize: 11)
+        t.textColor = .tertiaryLabelColor
+        return t
+    }
+
+    private func toolButton(_ title: String, _ symbol: String, _ action: Selector) -> NSButton {
+        let b = NSButton(title: " " + title, target: self, action: action)
+        b.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
+        b.imagePosition = .imageLeading
+        b.bezelStyle = .rounded
+        b.controlSize = .large
+        return b
+    }
+
     @objc func calibrate() { model.recalibrate() }
-    @objc func togglePause(_ b: NSButton) { model.paused.toggle(); b.title = model.paused ? "Resume" : "Pause" }
-    @objc func toggleMute(_ b: NSButton) { model.muted.toggle(); b.title = model.muted ? "Unmute" : "Mute" }
+    @objc func togglePause(_ b: NSButton) {
+        model.paused.toggle()
+        b.title = model.paused ? " Resume" : " Pause"
+        b.image = NSImage(systemSymbolName: model.paused ? "play.fill" : "pause.fill", accessibilityDescription: nil)
+    }
+    @objc func toggleMute(_ b: NSButton) {
+        model.muted.toggle()
+        b.title = model.muted ? " Unmute" : " Mute"
+        b.image = NSImage(systemSymbolName: model.muted ? "speaker.wave.2.fill" : "speaker.slash.fill", accessibilityDescription: nil)
+    }
 
     @objc func sensChanged(_ s: NSSlider) {
         model.slouchThresh = s.doubleValue
@@ -264,8 +364,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func cameraDenied() {
-        statusLabel.stringValue = "Camera access denied — enable it in System Settings ▸ Privacy ▸ Camera."
-        statusLabel.textColor = .systemRed
+        pill.set(.slouching, "Camera access denied")
+        subtitle.stringValue = "Enable it in System Settings ▸ Privacy ▸ Camera."
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ s: NSApplication) -> Bool { true }
