@@ -34,11 +34,11 @@ Two ways to do that:
 
 ## Steps to actually submit
 
-1. **App icon** — design a 1024×1024 PNG → drop into an `AppIcon` asset catalog (`Assets.xcassets`). The Store rejects apps without a full icon set. *(Not auto-generatable — needs a real icon.)*
+1. ~~**App icon**~~ ✅ **Done** — `appstore/Assets.xcassets/AppIcon.appiconset` has the full macOS icon set (a seated-upright figure on the teal→green gradient). Regenerate any time with `swiftc appstore/iconGen.swift -o /tmp/g && /tmp/g`, then re-run `sips`. Swap in a designer icon later by replacing the PNGs.
 
 2. **Create an Xcode project** (the source builds via raw `swiftc`; the Store needs a project to archive):
    - Xcode → File → New → Project → **macOS App** (AppKit, Swift). Bundle id `com.shivam.posturemonitor`.
-   - Delete the template's `App`/`ContentView` files; **add the four `appstore/*.swift` files** to the target.
+   - Delete the template's `App`/`ContentView` files; **add the four `appstore/*.swift` files** and **`appstore/Assets.xcassets`** to the target. Set Build Settings → *Asset Catalog App Icon Set Name* = `AppIcon`.
    - Signing & Capabilities → pick your **team**, add **App Sandbox** + **Camera**, point at `appstore/PostureMonitor.entitlements` (or let Xcode manage them — the keys match).
 
 3. **Archive & validate** — Xcode → Product → **Archive** → Organizer → **Validate App** (catches entitlement/signing issues before upload).
