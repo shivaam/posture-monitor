@@ -97,6 +97,7 @@ final class AppModel {
             if slouchSince == 0 { slouchSince = now }
             if now - slouchSince >= config.slouchGrace && now - lastSlouchAlert >= config.slouchCooldown {
                 lastSlouchAlert = now; wasAlerted = true
+                plog("ALERT fired (muted=\(muted))")
                 alertSound(); speak("sit up straight")
                 onAlert?("Sit up tall — you're slouching", false)
                 notify("Posture — sit up tall and lengthen your spine.")
@@ -104,7 +105,7 @@ final class AppModel {
         } else {
             slouchSince = 0
             if wasAlerted && slouchRatio > slouchThresh + 0.05 && headYDrop < config.headYMargin {
-                wasAlerted = false; recoverSound(); onAlert?("Nice — back to good posture", true)
+                wasAlerted = false; plog("RECOVER (muted=\(muted))"); recoverSound(); onAlert?("Nice — back to good posture", true)
             }
         }
 
@@ -209,8 +210,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow!
     private var cam: CameraPanel!
     private var statusLabel: NSTextField!
-    private var alertBanner: NSTextField!
-    private var toastTimer: Timer?
     private var pauseButton: NSButton!
     private var statusColor = Palette.settling
 
@@ -232,13 +231,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusLabel.maximumNumberOfLines = 3
         content.addSubview(statusLabel)
 
-        // Big auto-dismissing slouch/recover toast (hidden otherwise).
-        alertBanner = mk("", 26, .bold, .white)
-        alertBanner.alignment = .center; alertBanner.drawsBackground = true
-        alertBanner.frame = NSRect(x: 90, y: 250, width: 460, height: 60)
-        alertBanner.wantsLayer = true; alertBanner.layer?.cornerRadius = 12; alertBanner.isHidden = true
-        content.addSubview(alertBanner)
-
         // controls
         let cal = NSButton(title: "Calibrate", target: self, action: #selector(calibrate))
         cal.frame = NSRect(x: 16, y: 16, width: 100, height: 30); cal.bezelStyle = .rounded; cal.keyEquivalent = "\r"
@@ -258,7 +250,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         model.onState = { [weak self] s in self?.render(s) }
         model.onCameraDenied = { [weak self] in self?.cameraDenied() }
-        model.onAlert = { [weak self] msg, good in self?.showToast(msg, good: good) }
         model.start()
     }
 
@@ -273,16 +264,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             statusLabel.stringValue = "Good posture ✓"; statusLabel.textColor = Palette.good
         } else {
             statusLabel.stringValue = Palette.label(s.status); statusLabel.textColor = c
-        }
-    }
-
-    private func showToast(_ msg: String, good: Bool) {
-        alertBanner.stringValue = "  \(msg)  "
-        alertBanner.layer?.backgroundColor = (good ? Palette.good : Palette.alert).withAlphaComponent(0.95).cgColor
-        alertBanner.isHidden = false
-        toastTimer?.invalidate()
-        toastTimer = Timer.scheduledTimer(withTimeInterval: good ? 2.5 : 5.0, repeats: false) { [weak self] _ in
-            self?.alertBanner.isHidden = true
         }
     }
 
