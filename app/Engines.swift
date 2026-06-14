@@ -80,6 +80,7 @@ final class VisionEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
     var onVision: ((VisionReading) -> Void)?       // ~8 fps, main thread
     var onFrameJPEG: ((Data) -> Void)?             // ~5 fps, for MediaPipe
     var onCameraDenied: (() -> Void)?
+    var preferredDevice: AVCaptureDevice?          // chosen "Front view" device (nil = default)
 
     func start() {
         AVCaptureDevice.requestAccess(for: .video) { ok in
@@ -88,12 +89,26 @@ final class VisionEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
         }
     }
 
+    /// Switch the front-view camera live (the preview + analysis follow).
+    func switchTo(_ dev: AVCaptureDevice) {
+        queue.async {
+            self.preferredDevice = dev
+            self.session.beginConfiguration()
+            for i in self.session.inputs { self.session.removeInput(i) }
+            if let input = try? AVCaptureDeviceInput(device: dev), self.session.canAddInput(input) {
+                self.session.addInput(input)
+            }
+            self.session.commitConfiguration()
+        }
+    }
+
     private func configure() {
         session.beginConfiguration()
         session.sessionPreset = .high
-        if let dev = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front)
-            ?? AVCaptureDevice.default(for: .video),
-           let input = try? AVCaptureDeviceInput(device: dev), session.canAddInput(input) {
+        let dev = preferredDevice
+            ?? AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .front)
+            ?? AVCaptureDevice.default(for: .video)
+        if let dev, let input = try? AVCaptureDeviceInput(device: dev), session.canAddInput(input) {
             session.addInput(input)
         }
         let out = AVCaptureVideoDataOutput()

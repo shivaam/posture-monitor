@@ -27,6 +27,9 @@ final class AppModel {
     // Two front slouch signals, both baseline-relative:
     private var baseHeadAbove = 0.0, emaHeadAbove = 0.0   // head height ABOVE shoulders (MediaPipe)
     private var baseHeadY = 0.0, emaHeadY = 0.0           // absolute head height (Apple Vision) — catches whole-body sink
+    var sideActive = false                               // an optional side camera is selected
+    private var emaSideDeg = 0.0, sideBaseDeg: Double?    // forward-head angle (side camera) + its calibrated neutral
+    private var sideSeen = false
     private var slouchSince = 0.0
     private var slouchState = false    // hysteresis-stabilized (no flicker)
     private var lastSlouchAlert = -1e9
@@ -60,7 +63,16 @@ final class AppModel {
         mp.onReading = { [weak self] r in self?.lastMP = r }
         vision.start()
     }
-    func recalibrate() { logic.recalibrate(); wasCalibrated = false }
+    func recalibrate() { logic.recalibrate(); wasCalibrated = false; sideBaseDeg = nil }
+
+    // Side camera forward-head angle (smoothed). Drives the third slouch signal.
+    func feedSide(deg: Double?, present: Bool) {
+        guard present, let deg else { return }
+        if !sideSeen { emaSideDeg = deg; sideSeen = true }
+        emaSideDeg = emaSideDeg * 0.8 + deg * 0.2
+    }
+    var sideForwardDeg: Double { emaSideDeg }
+    func clearSide() { sideActive = false; sideSeen = false; sideBaseDeg = nil; emaSideDeg = 0 }
 
     private func feedVision(_ r: VisionReading) {
         lastVision = r
@@ -76,10 +88,11 @@ final class AppModel {
 
         _ = logic.update(present: present, head: head)   // presence + auto-calibration
 
-        // Capture both baselines the moment we calibrate.
+        // Capture all baselines the moment we calibrate.
         if logic.calibrated && !wasCalibrated {
             baseHeadAbove = emaHeadAbove > 0 ? emaHeadAbove : (lastMP.headAbove ?? 0)
             baseHeadY = emaHeadY > 0 ? emaHeadY : r.headY
+            if sideActive && sideSeen { sideBaseDeg = emaSideDeg }
         }
         wasCalibrated = logic.calibrated
 
@@ -89,11 +102,14 @@ final class AppModel {
         let slouchRatio = (logic.calibrated && baseHeadAbove > 0 && emaHeadAbove > 0) ? emaHeadAbove / baseHeadAbove : 1
         let headYDrop = (logic.calibrated && baseHeadY > 0 && emaHeadY > 0) ? max(0, baseHeadY - emaHeadY) : 0
         let headYMargin = max(0.015, 0.095 - (slouchThresh - 0.80) * 0.45)   // more sensitive slider -> smaller margin
+        let sideDev = (sideActive && sideSeen && sideBaseDeg != nil) ? max(0, emaSideDeg - (sideBaseDeg ?? 0)) : 0
+        let sideMargin = max(3.0, 14 - (slouchThresh - 0.80) * 60)           // degrees of forward-head (slider-scaled)
         let slouchFront = slouchRatio < slouchThresh
         let slouchSink = headYDrop > headYMargin
+        let slouchSide = sideActive && sideDev > sideMargin                  // head juts forward (side camera)
         // Hysteresis: flip to slouching on a clear drop, back only after a clear recovery.
-        if slouchFront || slouchSink { slouchState = true }
-        else if slouchRatio > slouchThresh + 0.05 && headYDrop < headYMargin * 0.6 { slouchState = false }
+        if slouchFront || slouchSink || slouchSide { slouchState = true }
+        else if slouchRatio > slouchThresh + 0.05 && headYDrop < headYMargin * 0.6 && sideDev < sideMargin * 0.6 { slouchState = false }
         let slouching = present && logic.calibrated && slouchState
 
         if slouching {
@@ -107,7 +123,7 @@ final class AppModel {
             }
         } else {
             slouchSince = 0
-            if wasAlerted && slouchRatio > slouchThresh + 0.05 && headYDrop < headYMargin {
+            if wasAlerted && slouchRatio > slouchThresh + 0.05 && headYDrop < headYMargin && sideDev < sideMargin {
                 wasAlerted = false; plog("RECOVER (muted=\(muted))"); recoverSound(); onAlert?("Nice — back to good posture", true)
             }
         }
@@ -115,13 +131,14 @@ final class AppModel {
         let slouchFloor = slouchThresh - 0.10
         let frontFrac = max(0, min(1, (slouchRatio - slouchFloor) / max(0.001, 1 - slouchFloor)))
         let headYFrac = (logic.calibrated && baseHeadY > 0) ? max(0, min(1, 1 - headYDrop / (headYMargin + 0.04))) : 1
-        let postureFrac = min(frontFrac, headYFrac)
+        let sideFrac = (sideActive && sideBaseDeg != nil) ? max(0, min(1, 1 - sideDev / (sideMargin + 6))) : 1
+        let postureFrac = min(frontFrac, headYFrac, sideFrac)
         let score = (present && logic.calibrated) ? Int((postureFrac * 100).rounded()) : -1
         let status: PostureLogic.Status = !present ? .away : (!logic.calibrated ? .settling : (slouching ? .slumping : .good))
 
         frames += 1
         if frames % 30 == 0 {
-            plog("slouch ratio=\(String(format: "%.2f", slouchRatio)) headYdrop=\(String(format: "%.3f", headYDrop)) front=\(slouchFront) sink=\(slouchSink) slouching=\(slouching) score=\(score)")
+            plog("slouch ratio=\(String(format: "%.2f", slouchRatio)) headYdrop=\(String(format: "%.3f", headYDrop)) sideDev=\(String(format: "%.0f", sideDev)) front=\(slouchFront) sink=\(slouchSink) side=\(slouchSide) slouching=\(slouching) score=\(score)")
         }
 
         onState?(State(
@@ -211,30 +228,59 @@ final class CameraPanel: NSView {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let model = AppModel()
     private var window: NSWindow!
+    private var content: NSView!
     private var cam: CameraPanel!
+    private var sidePanel: CameraPanel?
+    private var sideCam: SideCamera?
     private var statusLabel: NSTextField!
     private var pauseButton: NSButton!
+    private var frontPopup: NSPopUpButton?
+    private var sidePopup: NSPopUpButton?
     private var statusColor = Palette.settling
+    private var cameras: [AVCaptureDevice] = []
+    private let region = NSRect(x: 16, y: 64, width: 600, height: 500)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let rect = NSRect(x: 0, y: 0, width: 980, height: 560)
+        let rect = NSRect(x: 0, y: 0, width: 1000, height: 600)
         window = NSWindow(contentRect: rect, styleMask: [.titled, .closable, .miniaturizable],
                           backing: .buffered, defer: false)
         window.title = "Posture Monitor"; window.center()
-        let content = NSView(frame: rect); content.wantsLayer = true
+        content = NSView(frame: rect); content.wantsLayer = true
         content.layer?.backgroundColor = Palette.bg.cgColor
 
         cam = CameraPanel(session: model.vision.session)
-        cam.frame = NSRect(x: 16, y: 64, width: 600, height: 480)
         content.addSubview(cam)
 
         let rx: CGFloat = 650
         statusLabel = mk("Calibrating…", 34, .bold, Palette.settling)
-        statusLabel.frame = NSRect(x: rx, y: 300, width: 320, height: 130)
+        statusLabel.frame = NSRect(x: rx, y: 380, width: 330, height: 120)
         statusLabel.maximumNumberOfLines = 3
         content.addSubview(statusLabel)
 
-        // controls
+        // Camera pickers — only when there's a choice (one camera = no clutter).
+        cameras = availableCameras()
+        var helpY: CGFloat = 340
+        if cameras.count > 1 {
+            let fl = mk("Front view (facing you)", 11, .semibold, Palette.textMuted)
+            fl.frame = NSRect(x: rx, y: 320, width: 320, height: 16); content.addSubview(fl)
+            let fp = NSPopUpButton(frame: NSRect(x: rx, y: 294, width: 300, height: 24))
+            cameras.forEach { fp.addItem(withTitle: $0.localizedName) }
+            if let i = cameras.firstIndex(where: { $0.deviceType == .builtInWideAngleCamera }) { fp.selectItem(at: i) }
+            fp.target = self; fp.action = #selector(frontChanged); content.addSubview(fp); frontPopup = fp
+
+            let sl = mk("Side view (optional — catches forward-head)", 11, .semibold, Palette.textMuted)
+            sl.frame = NSRect(x: rx, y: 258, width: 330, height: 16); content.addSubview(sl)
+            let sp = NSPopUpButton(frame: NSRect(x: rx, y: 232, width: 300, height: 24))
+            sp.addItem(withTitle: "None")
+            cameras.forEach { sp.addItem(withTitle: $0.localizedName) }
+            sp.target = self; sp.action = #selector(sideChanged); content.addSubview(sp); sidePopup = sp
+            helpY = 190
+        }
+        let help = NSButton(title: "?  Help", target: self, action: #selector(showHelp))
+        help.frame = NSRect(x: rx, y: helpY, width: 90, height: 28); help.bezelStyle = .rounded
+        content.addSubview(help)
+
+        // controls row
         let cal = NSButton(title: "Calibrate", target: self, action: #selector(calibrate))
         cal.frame = NSRect(x: 16, y: 16, width: 100, height: 30); cal.bezelStyle = .rounded; cal.keyEquivalent = "\r"
         content.addSubview(cal)
@@ -247,13 +293,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sensLbl.frame = NSRect(x: 300, y: 20, width: 70, height: 18); content.addSubview(sensLbl)
         let sens = NSSlider(value: model.slouchThresh, minValue: 0.80, maxValue: 0.97,
                             target: self, action: #selector(sens(_:)))
-        sens.frame = NSRect(x: 372, y: 20, width: 200, height: 22); content.addSubview(sens)
+        sens.frame = NSRect(x: 372, y: 20, width: 220, height: 22); content.addSubview(sens)
 
+        if let fp = frontPopup, fp.indexOfSelectedItem >= 0 { model.vision.preferredDevice = cameras[fp.indexOfSelectedItem] }
+        relayoutPanels()
         window.contentView = content
         window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
         model.onState = { [weak self] s in self?.render(s) }
         model.onCameraDenied = { [weak self] in self?.cameraDenied() }
         model.start()
+
+        // First launch: show the setup guide once.
+        if !UserDefaults.standard.bool(forKey: "didShowHelp") {
+            UserDefaults.standard.set(true, forKey: "didShowHelp")
+            DispatchQueue.main.async { [weak self] in self?.showHelp() }
+        }
+    }
+
+    private func relayoutPanels() {
+        if let sp = sidePanel {
+            let half = (region.width - 8) / 2
+            cam.frame = NSRect(x: region.minX, y: region.minY, width: half, height: region.height)
+            sp.frame = NSRect(x: region.minX + half + 8, y: region.minY, width: half, height: region.height)
+        } else {
+            cam.frame = region
+        }
+    }
+
+    @objc private func frontChanged() {
+        guard let fp = frontPopup, fp.indexOfSelectedItem >= 0 else { return }
+        model.vision.switchTo(cameras[fp.indexOfSelectedItem]); model.recalibrate()
+    }
+
+    @objc private func sideChanged() {
+        sideCam?.stop(); sideCam = nil
+        sidePanel?.removeFromSuperview(); sidePanel = nil
+        model.clearSide()
+        if let sp = sidePopup, sp.indexOfSelectedItem >= 1 {   // 0 = None
+            let dev = cameras[sp.indexOfSelectedItem - 1]
+            let sc = SideCamera(device: dev); sideCam = sc
+            let panel = CameraPanel(session: sc.session); sidePanel = panel; content.addSubview(panel)
+            sc.onFrame = { [weak self] pts, w, h, deg, present in
+                guard let self else { return }
+                self.sidePanel?.setLandmarks(pts, color: self.statusColor, camSize: CGSize(width: w, height: h))
+                self.model.feedSide(deg: deg, present: present)
+            }
+            sc.start(); model.sideActive = true
+        }
+        relayoutPanels(); model.recalibrate()
+    }
+
+    @objc private func showHelp() {
+        let a = NSAlert(); a.messageText = "How to use PostureMonitor"
+        a.informativeText = """
+        1. Front view — a camera facing you (your built-in webcam is perfect).
+        2. Side view (optional) — place a second camera to your SIDE: a USB webcam, or your iPhone via Continuity Camera. It catches forward-head posture a front camera can't see. Pick it under "Side view".
+        3. Sit up TALL and click Calibrate — that sets your baseline.
+        4. Slouch and hold a few seconds; it nudges you with a sound and a red "Sit up" message.
+
+        Tip: drag the sensitivity slider, then re-calibrate, to dial it in.
+        """
+        a.addButton(withTitle: "Got it")
+        a.beginSheetModal(for: window)      // non-blocking — the live view keeps running behind it
     }
 
     private func render(_ s: AppModel.State) {

@@ -1,74 +1,72 @@
 # PostureMonitor
 
-A native macOS app that watches you through your laptop camera and **nudges you when you slouch** — no wearable, no cloud. All processing is on-device; nothing is recorded and your video never leaves the Mac.
+A native macOS app that watches you through your laptop camera and **nudges you when you slouch**. No wearable, no cloud — everything runs on your Mac.
 
 ![PostureMonitor](docs/screenshot.png)
 
-▶ **[10-second demo](docs/demo.mp4)** (watch it catch a slouch).
+▶ **[10-second demo](docs/demo.mp4)**
 
 ---
 
 ## What it does
 
-- Learns your **upright baseline** when you calibrate, then watches for drift.
-- Detects a slouch from **two signals**, so it catches the different ways people slump:
-  | signal | catches | how |
-  |---|---|---|
-  | head drops vs shoulders | leaning your head down/forward | MediaPipe: nose vs shoulders |
-  | whole body sinks | slumping straight down | Apple Vision: absolute head height |
-- Only nudges on a **sustained** slouch (an 8-second grace), with **hysteresis** so it doesn't flicker — a quick glance down won't nag you.
-- A calm readout: **"Good posture ✓"** or **"Slouching — sit up in 5s…"** counting down, plus a sound and an optional spoken reminder.
-- Live MediaPipe skeleton drawn over your camera.
+Sit up tall and click **Calibrate** — that's your baseline. Then it watches, and after you've held a slouch for a few seconds it nudges you with a sound and a red **"Sit up"** message. A quick glance down won't nag you (there's a grace period + smoothing).
+
+It detects a slouch from up to three signals — head dropping toward your shoulders, your whole body sinking down, and (with an optional side camera) your head jutting forward. One clean status: **Good posture ✓** or a **Slouching — sit up in 5s…** countdown.
+
+## Requirements
+
+**Hardware**
+- Any Mac running macOS (Apple Silicon or Intel).
+- A camera — your **built-in webcam is all you need**.
+- *Optional:* a second camera (a USB webcam, or your **iPhone via Continuity Camera**) placed to your side. It catches forward-head posture a front camera can't see. The app shows **Front view / Side view** pickers when a second camera is present.
+
+**Software** (one-time setup, handled by `start.sh`)
+- **Xcode command-line tools** — `xcode-select --install`
+- **Python 3.9–3.12** — for the local pose server (MediaPipe doesn't support 3.13+ yet; `brew install python@3.12` if your default is newer).
 
 ## Quick start
 
-**Prerequisites:** macOS, **Xcode command-line tools** (`xcode-select --install`), and **Python 3.9–3.12** (MediaPipe doesn't support 3.13+ yet — `brew install python@3.12` if your default is newer).
-
 ```bash
-git clone <your-repo-url> posture-monitor
+git clone https://github.com/shivaam/posture-monitor
 cd posture-monitor
-./start.sh        # first run builds the app + sets up the server (~2 min), then launches
+./start.sh
 ```
 
-`start.sh` checks the prerequisites, builds the app once, sets up a local Python venv, downloads the MediaPipe model, starts the server, and opens the app. After that, just run `./start.sh` to launch.
+First run builds the app, sets up the pose server (a local Python venv + model download), and launches everything — ~2 minutes. After that, `./start.sh` just opens it. You'll click **Allow** on the camera prompt once.
 
-Then **sit up tall and click "Calibrate"** (or wait ~6s for auto-calibration) — that's your baseline. Slouch from there and it'll nudge you.
+> Tip: add `alias posture='/full/path/to/posture-monitor/start.sh'` to your `~/.zshrc`, then just type `posture`.
 
-> Tip: `alias posture='/full/path/to/posture-monitor/start.sh'` in your `~/.zshrc`, then just type `posture`.
+## Privacy
 
-## How it works
+**Everything runs locally and nothing is recorded.** Apple Vision runs inside the app; MediaPipe runs in a server on `127.0.0.1` (your machine only). No video or frames are saved to disk or sent anywhere, there are no accounts, and the only network request is a one-time model download during setup. Your camera feed never leaves your Mac.
 
-```
-posture-monitor/
-  app/      native macOS app (Swift, AppKit + Apple Vision) — built by app/build.sh
-  server/   MediaPipe pose server (FastAPI) — run.sh sets up its venv + model itself
-  tools/    dev/experiment scripts (analysis, the labeled-data harness, face-blur) — not needed to run
-  start.sh  one command: server + build (first run) + open the app
-```
+## Tuning
 
-- The **app** owns the camera, runs Apple Vision (face position) every frame, and POSTs downscaled frames to the local **server** for MediaPipe pose landmarks (shoulders, ears). It fuses both into the two slouch signals above.
-- The server runs on `127.0.0.1:8077` (localhost only); it stores nothing.
-
-**Tuning** — drag the in-app sensitivity slider, or create `~/.posturemonitor.json`:
+Drag the in-app **sensitivity** slider (and re-calibrate), or create `~/.posturemonitor.json`:
 
 ```jsonc
 {
-  "slouchThresh": 0.87,    // head-drop ratio that counts as slouching (lower = less sensitive)
-  "headYMargin": 0.05,     // absolute head-sink that counts as slouching
+  "slouchThresh": 0.90,    // sensitivity — lower = less sensitive (also scales the other signals)
   "slouchGrace": 8,        // seconds of slouch before it nudges
   "slouchCooldown": 45,    // min seconds between nudges
   "speakAlerts": false     // also say "sit up straight" out loud
 }
 ```
 
-## Privacy
+## How it works
 
-Everything runs locally — Apple Vision in the app, MediaPipe in a localhost server. **No video, frames, or data are recorded or sent anywhere.**
+```
+app/      native macOS app (Swift, AppKit + Apple Vision)
+server/   local MediaPipe pose server (FastAPI) — /health + /posture
+tools/    analysis + experiment scripts (not needed to run)
+start.sh  one command to set up + launch everything
+```
 
-## How we got here
+The app runs Apple Vision (face position) every frame and sends downscaled frames to the local server for MediaPipe pose landmarks (shoulders, ears), fusing them into the slouch signals above.
 
-Most of our strong intuitions were wrong — the "lean" signal turned out to be statistical noise, one signal beat a four-signal fusion, and a vision-LLM judge only hit ~65%. The full experiment log, data, and stats are in **[TECHNICAL.md](TECHNICAL.md)**.
+The path here wasn't obvious — we measured a lot and most of our intuitions were wrong. The full experiment log and data are in **[TECHNICAL.md](TECHNICAL.md)**.
 
 ## License
 
-MIT (see LICENSE).
+MIT — see [LICENSE](LICENSE).
