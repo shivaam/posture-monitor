@@ -16,7 +16,7 @@ It detects a slouch from up to three signals — head dropping toward your shoul
 
 **It lives in your menu bar.** Close the window and it keeps running quietly. From the menu-bar icon you can:
 - **Switch modes** — *Continuous* (camera always on, real-time) or *Periodic* (camera **off**, wakes briefly every 1–10 min for a quick check — lighter and more private for all-day use).
-- **Pick how you're alerted** — any mix of 🔊 **sound**, ⚡ **screen flash**, and 💬 **on-screen banner**.
+- **Pick how you're alerted** — any mix of 🔊 **sound**, ⚡ a **soft screen-edge glow** (ambient, doesn't cover your work), and 💬 an **on-screen banner**.
 - Calibrate, pause, mute, or quit.
 
 ## Requirements

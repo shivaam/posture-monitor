@@ -597,15 +597,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: overlays
 
+    /// A gentle peripheral edge-glow — not a full-screen wash. Only the screen edges
+    /// warm up; the center stays clear so your work is never covered. Eases in/out
+    /// slowly so it reads as an ambient cue in your peripheral vision, not a strobe.
     private func flashScreen() {
         guard let screen = NSScreen.main else { return }
         let w = NSWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
-        w.isOpaque = false; w.backgroundColor = NSColor.systemRed.withAlphaComponent(0.32)
+        w.isOpaque = false; w.backgroundColor = .clear
         w.level = .screenSaver; w.ignoresMouseEvents = true; w.hasShadow = false; w.alphaValue = 0
+
+        let v = NSView(frame: NSRect(origin: .zero, size: screen.frame.size))
+        let glow = CAGradientLayer()
+        glow.frame = v.bounds
+        glow.type = .radial
+        let tint = NSColor.systemOrange                 // warm + calm, not alarm-red
+        glow.colors = [tint.withAlphaComponent(0).cgColor,
+                       tint.withAlphaComponent(0).cgColor,
+                       tint.withAlphaComponent(0.5).cgColor]
+        glow.locations = [0.0, 0.6, 1.0]                // clear center → glow only near the edges
+        glow.startPoint = CGPoint(x: 0.5, y: 0.5)
+        glow.endPoint = CGPoint(x: 1.0, y: 1.0)         // radius reaches the corners
+        v.layer = glow; v.wantsLayer = true
+        w.contentView = v
         w.orderFrontRegardless(); flashWin = w
-        NSAnimationContext.runAnimationGroup({ c in c.duration = 0.1; w.animator().alphaValue = 1 }) {
-            NSAnimationContext.runAnimationGroup({ c in c.duration = 0.5; w.animator().alphaValue = 0 }) {
-                w.orderOut(nil); if self.flashWin === w { self.flashWin = nil }
+
+        // Slow, soft pulse: ~0.4s up, brief hold, ~1.0s down.
+        NSAnimationContext.runAnimationGroup({ c in c.duration = 0.4; w.animator().alphaValue = 1 }) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                NSAnimationContext.runAnimationGroup({ c in c.duration = 1.0; w.animator().alphaValue = 0 }) {
+                    w.orderOut(nil); if self.flashWin === w { self.flashWin = nil }
+                }
             }
         }
     }
