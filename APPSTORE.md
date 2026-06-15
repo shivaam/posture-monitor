@@ -6,6 +6,15 @@ The blocker is **not** cost or paperwork. It's architecture.
 
 ---
 
+## Your account specifics
+
+- **Bundle id:** `com.shivam.posturemonitor` — matches your existing `com.shivam.*` convention. Not user-facing; no need to change.
+- **Submit under your paid team** (the same one all your shipping apps already use) — pick it in Xcode → Signing & Capabilities. The exact Team ID is in local notes, kept out of this public repo.
+- **Do NOT use the secondary Apple-ID dev cert** that happens to be in your keychain — it's not your publishing identity. `appstore/build.sh` auto-selects it only for *local* camera-permission signing.
+- **No manual distribution cert needed:** Xcode auto-creates the "Apple Distribution" cert when you Archive under your team.
+
+---
+
 ## ⛔ The one thing that must change first
 
 The App Store requires every app to run in the **App Sandbox**. A sandboxed app **cannot spawn or talk to our local Python MediaPipe server** — no bundled Python runtime, no `127.0.0.1:8077`. So the Store version has to detect posture **natively, in-process**, with no server.
