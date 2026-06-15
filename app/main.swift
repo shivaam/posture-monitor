@@ -1,5 +1,10 @@
-// main.swift — PostureMonitor: one camera + MediaPipe skeleton overlay on the
-// left, a single calm status on the right. Alerts when you slouch.
+// main.swift — PostureMonitor: a camera + MediaPipe skeleton overlay and a calm
+// status. Lives in the menu bar; can run a window OR quietly in the background.
+//
+// Two modes:
+//   • Continuous — camera always on, real-time detection + grace period.
+//   • Periodic   — camera OFF; wakes every N minutes for a short check, then off.
+// Alerts are pick-your-style: sound, screen flash, and/or an on-screen banner.
 
 import AppKit
 import AVFoundation
@@ -16,6 +21,8 @@ func plog(_ s: String) {
 // MARK: - App model (calibration + slouch detection + alerts)
 
 final class AppModel {
+    enum Mode: String { case continuous, periodic }
+
     let vision = VisionEngine()
     let mp = MediaPipeClient()
     let logic = PostureLogic()
@@ -23,6 +30,12 @@ final class AppModel {
     var muted = false
     var paused = false
     var slouchThresh = 0.87        // live sensitivity (the slider sets this)
+
+    // Background / periodic mode + alert styles (initialized from config).
+    var mode: Mode = .continuous
+    var intervalMin = 5.0
+    var needsTwo = true
+    var alertSound = true, alertFlash = false, alertBanner = false
 
     // Two front slouch signals, both baseline-relative:
     private var baseHeadAbove = 0.0, emaHeadAbove = 0.0   // head height ABOVE shoulders (MediaPipe)
@@ -34,12 +47,23 @@ final class AppModel {
     private var slouchState = false    // hysteresis-stabilized (no flicker)
     private var lastSlouchAlert = -1e9
 
+    // Periodic state machine.
+    private enum Phase { case calibrating, idle, sampling }
+    private var phase: Phase = .calibrating
+    private var ticker: Timer?
+    private var nextSampleAt = 0.0
+    private var sampleUntil = 0.0
+    private var burstPresent = 0, burstSlouch = 0
+    private var consecutive = 0
+
     private var lastVision = VisionReading()
     private var lastMP = MPReading()
     private var lastPresent = 0.0
     private var wasAlerted = false
     private var wasCalibrated = false
     private var frames = 0
+
+    var calibrated: Bool { logic.calibrated }
 
     struct State {
         var status: PostureLogic.Status
@@ -53,17 +77,95 @@ final class AppModel {
     }
     var onState: ((State) -> Void)?
     var onCameraDenied: (() -> Void)?
-    var onAlert: ((_ message: String, _ good: Bool) -> Void)?
+    // Background-status updates (periodic mode, when no frames are flowing).
+    var onModeStatus: ((_ text: String, _ status: PostureLogic.Status) -> Void)?
+    // Alert delivery the UI handles (flash + banner). Sound/speech are played here.
+    var onAlert: ((_ message: String, _ good: Bool, _ flash: Bool, _ banner: Bool) -> Void)?
 
     func start() {
         slouchThresh = config.slouchThresh
+        mode = Mode(rawValue: config.monitorMode) ?? .continuous
+        intervalMin = config.sampleIntervalMin
+        needsTwo = config.periodicNeedsTwo
+        alertSound = config.alertSound; alertFlash = config.alertFlash; alertBanner = config.alertBanner
         vision.onVision = { [weak self] r in self?.feedVision(r) }
         vision.onFrameJPEG = { [weak self] d in if self?.paused == false { self?.mp.send(d) } }
         vision.onCameraDenied = { [weak self] in self?.onCameraDenied?() }
         mp.onReading = { [weak self] r in self?.lastMP = r }
         vision.start()
     }
-    func recalibrate() { logic.recalibrate(); wasCalibrated = false; sideBaseDeg = nil }
+    func recalibrate() { logic.recalibrate(); wasCalibrated = false; sideBaseDeg = nil; phase = .calibrating; vision.resumeCamera() }
+
+    /// (Re)configure the run loop for the current mode. Call after any mode/interval change.
+    func applyMode() {
+        ticker?.invalidate(); ticker = nil
+        if mode == .continuous {
+            vision.resumeCamera()
+            onModeStatus?("", .good)
+            plog("mode -> continuous")
+        } else {
+            phase = logic.calibrated ? .idle : .calibrating
+            if phase == .idle { nextSampleAt = ProcessInfo.processInfo.systemUptime + 3; vision.stopCamera() }
+            else { vision.resumeCamera() }
+            ticker = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.tick() }
+            plog("mode -> periodic every \(Int(intervalMin))m")
+        }
+    }
+
+    private func tick() {
+        let now = ProcessInfo.processInfo.systemUptime
+        if paused {
+            if phase != .calibrating { vision.stopCamera() }
+            onModeStatus?("Paused", .away)
+            return
+        }
+        switch phase {
+        case .calibrating:
+            if logic.calibrated { phase = .idle; nextSampleAt = now + 3; vision.stopCamera() }
+            else { onModeStatus?("Calibrating — sit up tall…", .settling) }
+        case .idle:
+            if now >= nextSampleAt { beginSample() }
+            else {
+                let m = max(1, Int(ceil((nextSampleAt - now) / 60)))
+                onModeStatus?("Good — next check in \(m)m", .good)
+            }
+        case .sampling:
+            if now >= sampleUntil { endSample() }
+        }
+    }
+
+    private func beginSample() {
+        phase = .sampling; burstPresent = 0; burstSlouch = 0
+        vision.resumeCamera()
+        sampleUntil = ProcessInfo.processInfo.systemUptime + max(2, config.sampleSeconds)
+        onModeStatus?("Checking…", .settling)
+        plog("periodic: sampling")
+    }
+
+    private func endSample() {
+        vision.stopCamera()
+        phase = .idle
+        nextSampleAt = ProcessInfo.processInfo.systemUptime + max(60, intervalMin * 60)
+        let mins = Int(intervalMin)
+        if burstPresent == 0 {
+            consecutive = 0
+            onModeStatus?("Away — next check in \(mins)m", .away)
+            plog("periodic: away (no face)")
+            return
+        }
+        let slouch = burstSlouch * 2 > burstPresent     // majority of present frames slouching
+        if slouch {
+            consecutive += 1
+            let trigger = needsTwo ? consecutive >= 2 : consecutive >= 1
+            plog("periodic: slouch (\(burstSlouch)/\(burstPresent), streak \(consecutive), trigger=\(trigger))")
+            if trigger { fireAlert("Sit up tall — you're slouching", good: false); consecutive = 0 }
+            onModeStatus?("Slouching — next check in \(mins)m", .slumping)
+        } else {
+            consecutive = 0
+            onModeStatus?("Good posture ✓ — next in \(mins)m", .good)
+            plog("periodic: good (\(burstSlouch)/\(burstPresent))")
+        }
+    }
 
     // Side camera forward-head angle (smoothed). Drives the third slouch signal.
     func feedSide(deg: Double?, present: Bool) {
@@ -96,35 +198,39 @@ final class AppModel {
         }
         wasCalibrated = logic.calibrated
 
-        // SLOUCH = head drops vs shoulders (MediaPipe) OR whole head sinks (Vision).
-        // ONE sensitivity slider (slouchThresh) drives BOTH signals: the head-Y margin
-        // is derived from it, so dragging the slider visibly changes everything.
+        // SLOUCH = head drops vs shoulders (MediaPipe) OR whole head sinks (Vision) OR
+        // head juts forward (side camera). ONE sensitivity slider drives all signals.
         let slouchRatio = (logic.calibrated && baseHeadAbove > 0 && emaHeadAbove > 0) ? emaHeadAbove / baseHeadAbove : 1
         let headYDrop = (logic.calibrated && baseHeadY > 0 && emaHeadY > 0) ? max(0, baseHeadY - emaHeadY) : 0
-        let headYMargin = max(0.015, 0.095 - (slouchThresh - 0.80) * 0.45)   // more sensitive slider -> smaller margin
+        let headYMargin = max(0.015, 0.095 - (slouchThresh - 0.80) * 0.45)
         let sideDev = (sideActive && sideSeen && sideBaseDeg != nil) ? max(0, emaSideDeg - (sideBaseDeg ?? 0)) : 0
-        let sideMargin = max(3.0, 14 - (slouchThresh - 0.80) * 60)           // degrees of forward-head (slider-scaled)
+        let sideMargin = max(3.0, 14 - (slouchThresh - 0.80) * 60)
         let slouchFront = slouchRatio < slouchThresh
         let slouchSink = headYDrop > headYMargin
-        let slouchSide = sideActive && sideDev > sideMargin                  // head juts forward (side camera)
+        let slouchSide = sideActive && sideDev > sideMargin
+        let instSlouch = slouchFront || slouchSink || slouchSide
         // Hysteresis: flip to slouching on a clear drop, back only after a clear recovery.
-        if slouchFront || slouchSink || slouchSide { slouchState = true }
+        if instSlouch { slouchState = true }
         else if slouchRatio > slouchThresh + 0.05 && headYDrop < headYMargin * 0.6 && sideDev < sideMargin * 0.6 { slouchState = false }
         let slouching = present && logic.calibrated && slouchState
 
-        if slouching {
-            if slouchSince == 0 { slouchSince = now }
-            if now - slouchSince >= config.slouchGrace && now - lastSlouchAlert >= config.slouchCooldown {
-                lastSlouchAlert = now; wasAlerted = true
-                plog("ALERT fired (muted=\(muted))")
-                alertSound(); speak("sit up straight")
-                onAlert?("Sit up tall — you're slouching", false)
-                notify("Posture — sit up tall and lengthen your spine.")
+        if mode == .periodic {
+            // No grace-based alerts; just tally this burst. endSample() decides.
+            if phase == .sampling && present && logic.calibrated {
+                burstPresent += 1; if instSlouch { burstSlouch += 1 }
             }
         } else {
-            slouchSince = 0
-            if wasAlerted && slouchRatio > slouchThresh + 0.05 && headYDrop < headYMargin && sideDev < sideMargin {
-                wasAlerted = false; plog("RECOVER (muted=\(muted))"); recoverSound(); onAlert?("Nice — back to good posture", true)
+            if slouching {
+                if slouchSince == 0 { slouchSince = now }
+                if now - slouchSince >= config.slouchGrace && now - lastSlouchAlert >= config.slouchCooldown {
+                    lastSlouchAlert = now; wasAlerted = true
+                    fireAlert("Sit up tall — you're slouching", good: false)
+                }
+            } else {
+                slouchSince = 0
+                if wasAlerted && slouchRatio > slouchThresh + 0.05 && headYDrop < headYMargin && sideDev < sideMargin {
+                    wasAlerted = false; fireAlert("Nice — back to good posture", good: true)
+                }
             }
         }
 
@@ -148,10 +254,16 @@ final class AppModel {
             camW: r.frameW > 0 ? r.frameW : 16, camH: r.frameH > 0 ? r.frameH : 9))
     }
 
-    private func alertSound() { if !muted { run("/usr/bin/afplay", ["/System/Library/Sounds/Funk.aiff"]) } }
-    private func recoverSound() { if !muted { run("/usr/bin/afplay", ["/System/Library/Sounds/Glass.aiff"]) } }
-    private func speak(_ s: String) { if !muted && config.speakAlerts { run("/usr/bin/say", [s]) } }
-    private func notify(_ msg: String) { run("/usr/bin/osascript", ["-e", "display notification \"\(msg)\" with title \"Posture\""]) }
+    /// Deliver an alert via the enabled styles. Sound/speech here; flash + banner via the UI.
+    private func fireAlert(_ message: String, good: Bool) {
+        plog("alert(\(good ? "recover" : "nudge")) sound=\(alertSound) flash=\(alertFlash) banner=\(alertBanner) muted=\(muted)")
+        if alertSound && !muted {
+            run("/usr/bin/afplay", [good ? "/System/Library/Sounds/Glass.aiff" : "/System/Library/Sounds/Funk.aiff"])
+        }
+        if !good && !muted && config.speakAlerts { run("/usr/bin/say", ["sit up straight"]) }
+        onAlert?(message, good, good ? false : alertFlash, alertBanner)   // never flash on recovery
+    }
+
     private func run(_ path: String, _ args: [String]) {
         let p = Process(); p.executableURL = URL(fileURLWithPath: path); p.arguments = args; try? p.run()
     }
@@ -223,7 +335,7 @@ final class CameraPanel: NSView {
     }
 }
 
-// MARK: - Window
+// MARK: - App
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let model = AppModel()
@@ -240,11 +352,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var cameras: [AVCaptureDevice] = []
     private let region = NSRect(x: 16, y: 64, width: 600, height: 500)
 
+    // Menu bar.
+    private var statusItem: NSStatusItem!
+    private var statusMenuItem: NSMenuItem?
+    private var lastStatusText = "Starting…"
+    // Overlays (held so they survive their animations).
+    private var flashWin: NSWindow?
+    private var bannerWin: NSWindow?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         let rect = NSRect(x: 0, y: 0, width: 1000, height: 600)
         window = NSWindow(contentRect: rect, styleMask: [.titled, .closable, .miniaturizable],
                           backing: .buffered, defer: false)
         window.title = "Posture Monitor"; window.center()
+        window.isReleasedWhenClosed = false   // closing just hides it; the app lives in the menu bar
         content = NSView(frame: rect); content.wantsLayer = true
         content.layer?.backgroundColor = Palette.bg.cgColor
 
@@ -299,9 +420,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         relayoutPanels()
         window.contentView = content
         window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+
+        // Menu bar.
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        setMenuStatus(.settling, "Starting…")
+        buildMenu()
+
         model.onState = { [weak self] s in self?.render(s) }
         model.onCameraDenied = { [weak self] in self?.cameraDenied() }
+        model.onModeStatus = { [weak self] text, st in self?.applyBackgroundStatus(text, st) }
+        model.onAlert = { [weak self] msg, good, flash, banner in
+            if flash { self?.flashScreen() }
+            if banner { self?.showBanner(msg, good: good) }
+        }
         model.start()
+        model.applyMode()    // honor the saved mode (continuous / periodic)
 
         // First launch: show the setup guide once.
         if !UserDefaults.standard.bool(forKey: "didShowHelp") {
@@ -309,6 +442,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.async { [weak self] in self?.showHelp() }
         }
     }
+
+    // MARK: layout / cameras
 
     private func relayoutPanels() {
         if let sp = sidePanel {
@@ -346,29 +481,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func showHelp() {
         let a = NSAlert(); a.messageText = "How to use PostureMonitor"
         a.informativeText = """
-        1. Front view — a camera facing you (your built-in webcam is perfect).
-        2. Side view (optional) — place a second camera to your SIDE: a USB webcam, or your iPhone via Continuity Camera. It catches forward-head posture a front camera can't see. Pick it under "Side view".
-        3. Sit up TALL and click Calibrate — that sets your baseline.
-        4. Slouch and hold a few seconds; it nudges you with a sound and a red "Sit up" message.
+        1. Sit up TALL and click Calibrate — that sets your baseline.
+        2. Slouch and hold a few seconds; it nudges you.
+        3. Menu-bar icon (top right): switch between Continuous and Periodic mode, \
+        pick how you're alerted (sound / screen flash / banner), pause, or quit.
 
-        Tip: drag the sensitivity slider, then re-calibrate, to dial it in.
+        Periodic mode keeps the camera OFF and wakes it briefly every few minutes — \
+        lighter and more private for all-day use. Close this window any time; the app \
+        keeps running in the menu bar.
         """
         a.addButton(withTitle: "Got it")
-        a.beginSheetModal(for: window)      // non-blocking — the live view keeps running behind it
+        a.beginSheetModal(for: window)
     }
+
+    // MARK: rendering
 
     private func render(_ s: AppModel.State) {
         let c = Palette.color(s.status); statusColor = c
         cam.setLandmarks(s.points, color: c, camSize: CGSize(width: s.camW, height: s.camH))
+        var text: String
         if s.slouchHold > 0 {
             let left = Int(ceil(max(0, s.grace - s.slouchHold)))
-            statusLabel.stringValue = left > 0 ? "Slouching\nsit up in \(left)s" : "SLOUCHING\nsit up!"
+            text = left > 0 ? "Slouching\nsit up in \(left)s" : "SLOUCHING\nsit up!"
+            statusLabel.stringValue = text
             statusLabel.textColor = left > 0 ? Palette.warn : Palette.alert
         } else if s.status == .good {
-            statusLabel.stringValue = "Good posture ✓"; statusLabel.textColor = Palette.good
+            text = "Good posture ✓"; statusLabel.stringValue = text; statusLabel.textColor = Palette.good
         } else {
-            statusLabel.stringValue = Palette.label(s.status); statusLabel.textColor = c
+            text = Palette.label(s.status); statusLabel.stringValue = text; statusLabel.textColor = c
         }
+        if model.mode == .continuous { setMenuStatus(s.status, text.replacingOccurrences(of: "\n", with: " ")) }
+    }
+
+    /// Periodic-mode background status (camera off between checks).
+    private func applyBackgroundStatus(_ text: String, _ st: PostureLogic.Status) {
+        guard !text.isEmpty else { return }
+        setMenuStatus(st, text)
+        statusLabel.stringValue = text
+        statusLabel.textColor = Palette.color(st)
+        statusColor = Palette.color(st)
     }
 
     private func cameraDenied() {
@@ -380,15 +531,147 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    // MARK: menu bar
+
+    private func glyph(_ st: PostureLogic.Status) -> String {
+        switch st {
+        case .good:     return "checkmark.circle.fill"
+        case .slumping: return "exclamationmark.triangle.fill"
+        case .settling: return "hourglass"
+        case .away:     return "circle.dashed"
+        }
+    }
+
+    private func setMenuStatus(_ st: PostureLogic.Status, _ text: String) {
+        lastStatusText = text
+        if let b = statusItem.button {
+            let img = NSImage(systemSymbolName: glyph(st), accessibilityDescription: text)
+            img?.isTemplate = true
+            b.image = img
+            b.contentTintColor = Palette.color(st)
+            b.toolTip = text
+        }
+        statusMenuItem?.title = text.isEmpty ? "PostureMonitor" : text
+    }
+
+    private func check(_ title: String, _ action: Selector, _ on: Bool, tag: Int = 0, enabled: Bool = true) -> NSMenuItem {
+        let it = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        it.state = on ? .on : .off; it.tag = tag; it.isEnabled = enabled; it.target = self
+        return it
+    }
+
+    private func buildMenu() {
+        let m = NSMenu()
+        let status = NSMenuItem(title: lastStatusText, action: nil, keyEquivalent: ""); status.isEnabled = false
+        m.addItem(status); statusMenuItem = status
+        m.addItem(.separator())
+
+        m.addItem(check("Calibrate (sit up tall)", #selector(calibrate), false))
+        m.addItem(check("Show camera window", #selector(showWindow), false))
+        m.addItem(.separator())
+
+        let header = NSMenuItem(title: "Monitoring", action: nil, keyEquivalent: ""); header.isEnabled = false
+        m.addItem(header)
+        m.addItem(check("Continuous (camera always on)", #selector(setContinuous), model.mode == .continuous))
+        for mins in [1, 3, 5, 10] {
+            m.addItem(check("Periodic — every \(mins) min", #selector(setInterval(_:)),
+                            model.mode == .periodic && Int(model.intervalMin) == mins, tag: mins))
+        }
+        m.addItem(check("   ↳ nudge only after 2 checks", #selector(toggleTwo), model.needsTwo,
+                        enabled: model.mode == .periodic))
+        m.addItem(.separator())
+
+        let ah = NSMenuItem(title: "Alert me with", action: nil, keyEquivalent: ""); ah.isEnabled = false
+        m.addItem(ah)
+        m.addItem(check("   Sound", #selector(toggleSound), model.alertSound))
+        m.addItem(check("   Screen flash", #selector(toggleFlash), model.alertFlash))
+        m.addItem(check("   On-screen banner", #selector(toggleBanner), model.alertBanner))
+        m.addItem(check("Mute all sounds", #selector(toggleMuteMenu), model.muted))
+        m.addItem(.separator())
+
+        m.addItem(check(model.paused ? "Resume monitoring" : "Pause monitoring", #selector(togglePause), false))
+        let q = NSMenuItem(title: "Quit PostureMonitor", action: #selector(quit), keyEquivalent: "q"); q.target = self
+        m.addItem(q)
+        statusItem.menu = m
+    }
+
+    // MARK: overlays
+
+    private func flashScreen() {
+        guard let screen = NSScreen.main else { return }
+        let w = NSWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
+        w.isOpaque = false; w.backgroundColor = NSColor.systemRed.withAlphaComponent(0.32)
+        w.level = .screenSaver; w.ignoresMouseEvents = true; w.hasShadow = false; w.alphaValue = 0
+        w.orderFrontRegardless(); flashWin = w
+        NSAnimationContext.runAnimationGroup({ c in c.duration = 0.1; w.animator().alphaValue = 1 }) {
+            NSAnimationContext.runAnimationGroup({ c in c.duration = 0.5; w.animator().alphaValue = 0 }) {
+                w.orderOut(nil); if self.flashWin === w { self.flashWin = nil }
+            }
+        }
+    }
+
+    private func showBanner(_ message: String, good: Bool) {
+        bannerWin?.orderOut(nil)
+        guard let screen = NSScreen.main else { return }
+        let size = NSSize(width: 380, height: 66)
+        let f = NSRect(x: screen.frame.midX - size.width / 2, y: screen.frame.maxY - 170, width: size.width, height: size.height)
+        let w = NSWindow(contentRect: f, styleMask: .borderless, backing: .buffered, defer: false)
+        w.isOpaque = false; w.backgroundColor = .clear; w.level = .floating; w.ignoresMouseEvents = true
+
+        let v = NSVisualEffectView(frame: NSRect(origin: .zero, size: size))
+        v.material = .hudWindow; v.state = .active; v.wantsLayer = true
+        v.layer?.cornerRadius = 16; v.layer?.masksToBounds = true
+        let dot = NSView(frame: NSRect(x: 20, y: size.height / 2 - 7, width: 14, height: 14))
+        dot.wantsLayer = true
+        dot.layer?.backgroundColor = (good ? NSColor.systemGreen : NSColor.systemRed).cgColor
+        dot.layer?.cornerRadius = 7
+        v.addSubview(dot)
+        let label = NSTextField(labelWithString: message)
+        label.frame = NSRect(x: 46, y: 0, width: size.width - 60, height: size.height)
+        label.font = .systemFont(ofSize: 15, weight: .semibold); label.textColor = .labelColor
+        label.alignment = .left; label.maximumNumberOfLines = 2; label.lineBreakMode = .byWordWrapping
+        (label.cell as? NSTextFieldCell)?.usesSingleLineMode = false
+        v.addSubview(label)
+        w.contentView = v; w.alphaValue = 0; w.orderFrontRegardless(); bannerWin = w
+
+        NSAnimationContext.runAnimationGroup { c in c.duration = 0.18; w.animator().alphaValue = 1 }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.6) {
+            NSAnimationContext.runAnimationGroup({ c in c.duration = 0.4; w.animator().alphaValue = 0 }) {
+                w.orderOut(nil); if self.bannerWin === w { self.bannerWin = nil }
+            }
+        }
+    }
+
     private func mk(_ s: String, _ size: CGFloat, _ w: NSFont.Weight, _ col: NSColor) -> NSTextField {
         let t = NSTextField(labelWithString: s); t.font = .systemFont(ofSize: size, weight: w); t.textColor = col; return t
     }
 
+    // MARK: actions
+
     @objc private func calibrate() { model.recalibrate() }
-    @objc private func togglePause() { model.paused.toggle(); pauseButton.title = model.paused ? "Resume" : "Pause" }
-    @objc private func toggleMute(_ b: NSButton) { model.muted = (b.state == .on) }
+    @objc private func showWindow() { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
+    @objc private func togglePause() {
+        model.paused.toggle(); pauseButton.title = model.paused ? "Resume" : "Pause"; buildMenu()
+    }
+    @objc private func toggleMute(_ b: NSButton) { model.muted = (b.state == .on); buildMenu() }
+    @objc private func toggleMuteMenu() { model.muted.toggle(); buildMenu() }
     @objc private func sens(_ s: NSSlider) { model.slouchThresh = s.doubleValue; plog("sensitivity -> slouchThresh=\(String(format: "%.2f", s.doubleValue))") }
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+
+    @objc private func setContinuous() {
+        model.mode = .continuous; Config.set("monitorMode", "continuous"); model.applyMode(); buildMenu()
+    }
+    @objc private func setInterval(_ s: NSMenuItem) {
+        model.mode = .periodic; model.intervalMin = Double(s.tag)
+        Config.set("monitorMode", "periodic"); Config.set("sampleIntervalMin", Double(s.tag))
+        model.applyMode(); buildMenu()
+    }
+    @objc private func toggleTwo() { model.needsTwo.toggle(); Config.set("periodicNeedsTwo", model.needsTwo); buildMenu() }
+    @objc private func toggleSound() { model.alertSound.toggle(); Config.set("alertSound", model.alertSound); buildMenu() }
+    @objc private func toggleFlash() { model.alertFlash.toggle(); Config.set("alertFlash", model.alertFlash); buildMenu() }
+    @objc private func toggleBanner() { model.alertBanner.toggle(); Config.set("alertBanner", model.alertBanner); buildMenu() }
+    @objc private func quit() { NSApp.terminate(nil) }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 }
 
 let app = NSApplication.shared

@@ -82,12 +82,22 @@ final class VisionEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
     var onCameraDenied: (() -> Void)?
     var preferredDevice: AVCaptureDevice?          // chosen "Front view" device (nil = default)
 
+    private var configured = false
+
     func start() {
         AVCaptureDevice.requestAccess(for: .video) { ok in
             guard ok else { DispatchQueue.main.async { self.onCameraDenied?() }; return }
-            self.queue.async { self.configure(); self.session.startRunning() }
+            self.queue.async {
+                if !self.configured { self.configure(); self.configured = true }
+                self.session.startRunning()
+            }
         }
     }
+
+    /// Turn the camera (and its indicator light) OFF — used between periodic checks.
+    func stopCamera() { queue.async { if self.session.isRunning { self.session.stopRunning() } } }
+    /// Turn the camera back ON without reconfiguring. Safe to call before start() (no-op).
+    func resumeCamera() { queue.async { if self.configured, !self.session.isRunning { self.session.startRunning() } } }
 
     /// Switch the front-view camera live (the preview + analysis follow).
     func switchTo(_ dev: AVCaptureDevice) {
