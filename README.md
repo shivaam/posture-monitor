@@ -14,7 +14,7 @@ Sit up tall and click **Calibrate** — that's your baseline. Then it watches, a
 
 It detects a slouch from up to three signals — head dropping toward your shoulders, your whole body sinking down, and (with an optional side camera) your head jutting forward. One clean status: **Good posture ✓** or a **Slouching — sit up in 5s…** countdown.
 
-**It runs in the background from your menu bar** — no Dock icon, no window needed (the camera and detection run headless). The window only appears for first-run setup; after that it lives quietly as a menu-bar icon. From that icon you can:
+**It lives in your menu bar.** The window is there for setup and you can close it any time — the app keeps running. Want it fully out of the way? Uncheck **Show Dock icon** to run it as a background agent (no Dock icon, no window — the camera and detection run headless). From the menu-bar icon you can:
 - **Switch modes** — *Continuous* (camera always on, real-time) or *Periodic* (camera **off**, wakes briefly every 1–10 min for a quick check — lighter and more private for all-day use).
 - **Pick how you're alerted** — any mix of 🔊 **sound**, ⚡ a **soft screen-edge glow** (ambient, doesn't cover your work), and 💬 an **on-screen banner**.
 - Calibrate, pause, mute, **show the camera window**, toggle the **Dock icon**, or quit.

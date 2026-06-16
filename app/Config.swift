@@ -19,7 +19,7 @@ struct Config {
     var alertSound = true            // 🔊 play a sound
     var alertFlash = false           // ⚡ flash the screen
     var alertBanner = false          // 💬 floating on-screen banner
-    var showDockIcon = false         // false = menu-bar-only background app (no Dock icon)
+    var showDockIcon = true          // true = normal app (Dock icon + window); uncheck in menu to run in background
 
     static let url = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".posturemonitor.json")
