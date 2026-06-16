@@ -35,8 +35,10 @@ struct Config {
             if let v = j["slouchCooldown"] as? Double { c.slouchCooldown = v }
             if let v = j["speakAlerts"] as? Bool { c.speakAlerts = v }
         }
-        // UserDefaults overrides for the menu-driven options.
+        // UserDefaults overrides for the menu-driven options (take precedence over JSON).
         let d = UserDefaults.standard
+        if d.object(forKey: "slouchThresh") != nil { c.slouchThresh = d.double(forKey: "slouchThresh") }
+        if d.object(forKey: "slouchGrace") != nil { c.slouchGrace = d.double(forKey: "slouchGrace") }
         if d.object(forKey: "monitorMode") != nil { c.monitorMode = d.string(forKey: "monitorMode") ?? c.monitorMode }
         if d.object(forKey: "sampleIntervalMin") != nil { c.sampleIntervalMin = d.double(forKey: "sampleIntervalMin") }
         if d.object(forKey: "periodicNeedsTwo") != nil { c.periodicNeedsTwo = d.bool(forKey: "periodicNeedsTwo") }

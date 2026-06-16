@@ -29,7 +29,8 @@ final class AppModel {
     let config = Config.load()
     var muted = false
     var paused = false
-    var slouchThresh = 0.87        // live sensitivity (the slider sets this)
+    var slouchThresh = 0.87        // live sensitivity (the slider / menu sets this)
+    var graceSec = 8.0             // seconds of slouch before the nudge (continuous mode)
 
     // Background / periodic mode + alert styles (initialized from config).
     var mode: Mode = .continuous
@@ -84,6 +85,7 @@ final class AppModel {
 
     func start() {
         slouchThresh = config.slouchThresh
+        graceSec = config.slouchGrace
         mode = Mode(rawValue: config.monitorMode) ?? .continuous
         intervalMin = config.sampleIntervalMin
         needsTwo = config.periodicNeedsTwo
@@ -222,7 +224,7 @@ final class AppModel {
         } else {
             if slouching {
                 if slouchSince == 0 { slouchSince = now }
-                if now - slouchSince >= config.slouchGrace && now - lastSlouchAlert >= config.slouchCooldown {
+                if now - slouchSince >= graceSec && now - lastSlouchAlert >= config.slouchCooldown {
                     lastSlouchAlert = now; wasAlerted = true
                     fireAlert("Sit up tall — you're slouching", good: false)
                 }
@@ -249,7 +251,7 @@ final class AppModel {
 
         onState?(State(
             status: status, score: score, headFrac: postureFrac,
-            slouchHold: (slouching && slouchSince > 0) ? (now - slouchSince) : 0, grace: config.slouchGrace,
+            slouchHold: (slouching && slouchSince > 0) ? (now - slouchSince) : 0, grace: graceSec,
             points: lastMP.points,
             camW: r.frameW > 0 ? r.frameW : 16, camH: r.frameH > 0 ? r.frameH : 9))
     }
@@ -346,6 +348,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var sideCam: SideCamera?
     private var statusLabel: NSTextField!
     private var pauseButton: NSButton!
+    private var sensSlider: NSSlider?
     private var frontPopup: NSPopUpButton?
     private var sidePopup: NSPopUpButton?
     private var statusColor = Palette.settling
@@ -421,7 +424,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sensLbl.frame = NSRect(x: 300, y: 20, width: 70, height: 18); content.addSubview(sensLbl)
         let sens = NSSlider(value: model.slouchThresh, minValue: 0.80, maxValue: 0.97,
                             target: self, action: #selector(sens(_:)))
-        sens.frame = NSRect(x: 372, y: 20, width: 220, height: 22); content.addSubview(sens)
+        sens.frame = NSRect(x: 372, y: 20, width: 220, height: 22); content.addSubview(sens); sensSlider = sens
 
         if let fp = frontPopup, fp.indexOfSelectedItem >= 0 { model.vision.preferredDevice = cameras[fp.indexOfSelectedItem] }
         relayoutPanels()
@@ -592,6 +595,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         m.addItem(check("   ↳ nudge only after 2 checks", #selector(toggleTwo), model.needsTwo,
                         enabled: model.mode == .periodic))
+
+        // Sensitivity presets.
+        let sensMenu = NSMenu()
+        for (name, val) in [("Low — must slouch more", 0.84), ("Medium", 0.90), ("High — nudges sooner", 0.95)] {
+            let it = NSMenuItem(title: name, action: #selector(setSensitivity(_:)), keyEquivalent: "")
+            it.representedObject = val; it.state = abs(model.slouchThresh - val) < 0.025 ? .on : .off; it.target = self
+            sensMenu.addItem(it)
+        }
+        let sensItem = NSMenuItem(title: "Sensitivity", action: nil, keyEquivalent: ""); sensItem.submenu = sensMenu
+        m.addItem(sensItem)
+
+        // Nudge delay (continuous mode grace).
+        let graceMenu = NSMenu()
+        for sec in [3, 5, 8, 12] {
+            let it = NSMenuItem(title: "\(sec)s", action: #selector(setGrace(_:)), keyEquivalent: "")
+            it.tag = sec; it.state = Int(model.graceSec.rounded()) == sec ? .on : .off; it.target = self
+            graceMenu.addItem(it)
+        }
+        let graceItem = NSMenuItem(title: "Nudge after (continuous)", action: nil, keyEquivalent: "")
+        graceItem.submenu = graceMenu
+        m.addItem(graceItem)
         m.addItem(.separator())
 
         let ah = NSMenuItem(title: "Alert me with", action: nil, keyEquivalent: ""); ah.isEnabled = false
@@ -618,6 +642,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let w = NSWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
         w.isOpaque = false; w.backgroundColor = .clear
         w.level = .screenSaver; w.ignoresMouseEvents = true; w.hasShadow = false; w.alphaValue = 0
+        w.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
 
         let v = NSView(frame: NSRect(origin: .zero, size: screen.frame.size))
         let glow = CAGradientLayer()
@@ -650,7 +675,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let size = NSSize(width: 380, height: 66)
         let f = NSRect(x: screen.frame.midX - size.width / 2, y: screen.frame.maxY - 170, width: size.width, height: size.height)
         let w = NSWindow(contentRect: f, styleMask: .borderless, backing: .buffered, defer: false)
-        w.isOpaque = false; w.backgroundColor = .clear; w.level = .floating; w.ignoresMouseEvents = true
+        w.isOpaque = false; w.backgroundColor = .clear; w.level = .screenSaver; w.ignoresMouseEvents = true
+        // Float above full-screen apps so the nudge is visible even when you're heads-down.
+        w.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
 
         let v = NSVisualEffectView(frame: NSRect(origin: .zero, size: size))
         v.material = .hudWindow; v.state = .active; v.wantsLayer = true
@@ -695,7 +722,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     @objc private func toggleMute(_ b: NSButton) { model.muted = (b.state == .on); buildMenu() }
     @objc private func toggleMuteMenu() { model.muted.toggle(); buildMenu() }
-    @objc private func sens(_ s: NSSlider) { model.slouchThresh = s.doubleValue; plog("sensitivity -> slouchThresh=\(String(format: "%.2f", s.doubleValue))") }
+    @objc private func sens(_ s: NSSlider) {
+        model.slouchThresh = s.doubleValue; Config.set("slouchThresh", s.doubleValue)
+        plog("sensitivity -> slouchThresh=\(String(format: "%.2f", s.doubleValue))")
+    }
 
     @objc private func setContinuous() {
         model.mode = .continuous; Config.set("monitorMode", "continuous"); model.applyMode(); buildMenu()
@@ -706,6 +736,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.applyMode(); buildMenu()
     }
     @objc private func toggleTwo() { model.needsTwo.toggle(); Config.set("periodicNeedsTwo", model.needsTwo); buildMenu() }
+    @objc private func setSensitivity(_ s: NSMenuItem) {
+        guard let v = s.representedObject as? Double else { return }
+        model.slouchThresh = v; Config.set("slouchThresh", v); sensSlider?.doubleValue = v; buildMenu()
+    }
+    @objc private func setGrace(_ s: NSMenuItem) {
+        model.graceSec = Double(s.tag); Config.set("slouchGrace", Double(s.tag)); buildMenu()
+    }
     @objc private func toggleSound() { model.alertSound.toggle(); Config.set("alertSound", model.alertSound); buildMenu() }
     @objc private func toggleFlash() { model.alertFlash.toggle(); Config.set("alertFlash", model.alertFlash); buildMenu() }
     @objc private func toggleBanner() { model.alertBanner.toggle(); Config.set("alertBanner", model.alertBanner); buildMenu() }
