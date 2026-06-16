@@ -19,6 +19,7 @@ struct Config {
     var alertSound = true            // 🔊 play a sound
     var alertFlash = false           // ⚡ flash the screen
     var alertBanner = false          // 💬 floating on-screen banner
+    var showDockIcon = false         // false = menu-bar-only background app (no Dock icon)
 
     static let url = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".posturemonitor.json")
@@ -42,6 +43,7 @@ struct Config {
         if d.object(forKey: "alertSound") != nil { c.alertSound = d.bool(forKey: "alertSound") }
         if d.object(forKey: "alertFlash") != nil { c.alertFlash = d.bool(forKey: "alertFlash") }
         if d.object(forKey: "alertBanner") != nil { c.alertBanner = d.bool(forKey: "alertBanner") }
+        if d.object(forKey: "showDockIcon") != nil { c.showDockIcon = d.bool(forKey: "showDockIcon") }
         return c
     }
 }

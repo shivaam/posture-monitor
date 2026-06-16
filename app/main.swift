@@ -360,7 +360,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var flashWin: NSWindow?
     private var bannerWin: NSWindow?
 
+    private var showDock = false
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Menu-bar-only background app by default (no Dock icon). The camera + detection
+        // run headless — no window required.
+        showDock = model.config.showDockIcon
+        NSApp.setActivationPolicy(showDock ? .regular : .accessory)
+
         let rect = NSRect(x: 0, y: 0, width: 1000, height: 600)
         window = NSWindow(contentRect: rect, styleMask: [.titled, .closable, .miniaturizable],
                           backing: .buffered, defer: false)
@@ -419,7 +426,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let fp = frontPopup, fp.indexOfSelectedItem >= 0 { model.vision.preferredDevice = cameras[fp.indexOfSelectedItem] }
         relayoutPanels()
         window.contentView = content
-        window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+        // Show the window for first-run setup (calibration), or whenever the Dock icon
+        // is on. Otherwise stay quietly in the menu bar.
+        let firstRun = !UserDefaults.standard.bool(forKey: "didShowHelp")
+        if showDock || firstRun {
+            window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+        }
 
         // Menu bar.
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -568,6 +580,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         m.addItem(check("Calibrate (sit up tall)", #selector(calibrate), false))
         m.addItem(check("Show camera window", #selector(showWindow), false))
+        m.addItem(check("Show Dock icon", #selector(toggleDock), showDock))
         m.addItem(.separator())
 
         let header = NSMenuItem(title: "Monitoring", action: nil, keyEquivalent: ""); header.isEnabled = false
@@ -671,6 +684,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func calibrate() { model.recalibrate() }
     @objc private func showWindow() { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
+    @objc private func toggleDock() {
+        showDock.toggle(); Config.set("showDockIcon", showDock)
+        NSApp.setActivationPolicy(showDock ? .regular : .accessory)
+        if showDock { NSApp.activate(ignoringOtherApps: true) }
+        buildMenu()
+    }
     @objc private func togglePause() {
         model.paused.toggle(); pauseButton.title = model.paused ? "Resume" : "Pause"; buildMenu()
     }
@@ -696,7 +715,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 let app = NSApplication.shared
-app.setActivationPolicy(.regular)
 let delegate = AppDelegate()
 app.delegate = delegate
 app.run()
