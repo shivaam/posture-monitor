@@ -295,8 +295,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var statusMenuItem: NSMenuItem?
     var lastStatusText = "Starting…"
     var showDock = true
-    var flashWin: NSWindow?
+    var flashWins: [NSWindow] = []
     var bannerWin: NSWindow?
+    var prefs: PreferencesController?
 
     func applicationDidFinishLaunching(_ note: Notification) {
         showDock = model.config.showDockIcon
@@ -413,7 +414,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let b = statusItem.button {
             let img = NSImage(systemSymbolName: p.symbol, accessibilityDescription: text)
             img?.isTemplate = true
-            b.image = img; b.contentTintColor = p.color; b.toolTip = text
+            b.image = img
+            // For the neutral "away" state, leave the icon as a TEMPLATE (no tint) so
+            // macOS auto-renders it black on a light menu bar / white on a dark one —
+            // a fixed gray tint disappears in dark mode. Active states keep their
+            // bright status color (green/orange/red), which reads on both appearances.
+            b.contentTintColor = (p == .away) ? nil : p.color
+            b.toolTip = text
         }
         statusMenuItem?.title = text.isEmpty ? "PostureMonitor" : text
     }
@@ -429,68 +436,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let status = NSMenuItem(title: lastStatusText, action: nil, keyEquivalent: ""); status.isEnabled = false
         m.addItem(status); statusMenuItem = status
         m.addItem(.separator())
+
+        // Quick actions.
         m.addItem(check("Calibrate (sit up tall)", #selector(calibrate), false))
-        m.addItem(check("Show window", #selector(showWindow), false))
-        m.addItem(check("Show Dock icon", #selector(toggleDock), showDock))
-        m.addItem(.separator())
-
-        let mon = NSMenuItem(title: "Monitoring", action: nil, keyEquivalent: ""); mon.isEnabled = false; m.addItem(mon)
-        m.addItem(check("Continuous (camera always on)", #selector(setContinuous), model.mode == .continuous))
-        for mins in [1, 3, 5, 10] {
-            m.addItem(check("Periodic — every \(mins) min", #selector(setInterval(_:)),
-                            model.mode == .periodic && Int(model.intervalMin) == mins, tag: mins))
-        }
-        m.addItem(check("   ↳ nudge only after 2 checks", #selector(toggleTwo), model.needsTwo, enabled: model.mode == .periodic))
-
-        let sensMenu = NSMenu()
-        for (name, val) in [("Low — must slouch more", 0.84), ("Medium", 0.90), ("High — nudges sooner", 0.95)] {
-            let it = NSMenuItem(title: name, action: #selector(setSensitivity(_:)), keyEquivalent: "")
-            it.representedObject = val; it.state = abs(model.slouchThresh - val) < 0.025 ? .on : .off; it.target = self
-            sensMenu.addItem(it)
-        }
-        let sensItem = NSMenuItem(title: "Sensitivity", action: nil, keyEquivalent: ""); sensItem.submenu = sensMenu; m.addItem(sensItem)
-
-        let graceMenu = NSMenu()
-        for sec in [3, 5, 8, 12] {
-            let it = NSMenuItem(title: "\(sec)s", action: #selector(setGrace(_:)), keyEquivalent: "")
-            it.tag = sec; it.state = Int(model.graceSec.rounded()) == sec ? .on : .off; it.target = self
-            graceMenu.addItem(it)
-        }
-        let graceItem = NSMenuItem(title: "Nudge after (continuous)", action: nil, keyEquivalent: ""); graceItem.submenu = graceMenu; m.addItem(graceItem)
-        m.addItem(.separator())
-
-        let ah = NSMenuItem(title: "Alert me with", action: nil, keyEquivalent: ""); ah.isEnabled = false; m.addItem(ah)
-        m.addItem(check("   Sound", #selector(toggleSound), model.alertSound))
-        m.addItem(check("   Screen-edge glow", #selector(toggleFlash), model.alertFlash))
-        m.addItem(check("   On-screen banner", #selector(toggleBanner), model.alertBanner))
-        m.addItem(check("Mute all sounds", #selector(toggleMuteMenu), model.muted))
-        m.addItem(.separator())
         m.addItem(check(model.paused ? "Resume monitoring" : "Pause monitoring", #selector(togglePause), false))
-        let q = NSMenuItem(title: "Quit PostureMonitor", action: #selector(quit), keyEquivalent: "q"); q.target = self; m.addItem(q)
+        m.addItem(check("Mute all sounds", #selector(toggleMuteMenu), model.muted))
+        m.addItem(check("Show window", #selector(showWindow), false))
+
+        // Quick mode switch (detailed tuning lives in Preferences).
+        let modeMenu = NSMenu()
+        modeMenu.addItem(check("Continuous", #selector(setContinuous), model.mode == .continuous))
+        for mins in [1, 3, 5, 10] {
+            modeMenu.addItem(check("Every \(mins) min", #selector(setInterval(_:)),
+                                   model.mode == .periodic && Int(model.intervalMin) == mins, tag: mins))
+        }
+        let modeItem = NSMenuItem(title: "Mode", action: nil, keyEquivalent: ""); modeItem.submenu = modeMenu
+        m.addItem(modeItem)
+        m.addItem(.separator())
+
+        let prefsItem = NSMenuItem(title: "Preferences…", action: #selector(showPreferences), keyEquivalent: ",")
+        prefsItem.target = self; m.addItem(prefsItem)
+        m.addItem(check("About PostureMonitor", #selector(showAbout), false))
+        m.addItem(.separator())
+        let q = NSMenuItem(title: "Quit PostureMonitor", action: #selector(quit), keyEquivalent: "q")
+        q.target = self; m.addItem(q)
         statusItem.menu = m
     }
 
     // MARK: overlays
 
     private func flashScreen() {
-        guard let screen = NSScreen.main else { return }
-        let w = NSWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
-        w.isOpaque = false; w.backgroundColor = .clear
-        w.level = .screenSaver; w.ignoresMouseEvents = true; w.hasShadow = false; w.alphaValue = 0
-        w.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
-        let v = NSView(frame: NSRect(origin: .zero, size: screen.frame.size))
-        let glow = CAGradientLayer()
-        glow.frame = v.bounds; glow.type = .radial
-        let tint = NSColor.systemOrange
-        glow.colors = [tint.withAlphaComponent(0).cgColor, tint.withAlphaComponent(0).cgColor, tint.withAlphaComponent(0.5).cgColor]
-        glow.locations = [0.0, 0.6, 1.0]
-        glow.startPoint = CGPoint(x: 0.5, y: 0.5); glow.endPoint = CGPoint(x: 1.0, y: 1.0)
-        v.layer = glow; v.wantsLayer = true
-        w.contentView = v; w.orderFrontRegardless(); flashWin = w
-        NSAnimationContext.runAnimationGroup({ c in c.duration = 0.4; w.animator().alphaValue = 1 }) {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
-                NSAnimationContext.runAnimationGroup({ c in c.duration = 1.0; w.animator().alphaValue = 0 }) {
-                    w.orderOut(nil); if self.flashWin === w { self.flashWin = nil }
+        flashWins.forEach { $0.orderOut(nil) }; flashWins.removeAll()
+        // One glow per screen, so it reaches whichever monitor you're looking at.
+        for screen in NSScreen.screens {
+            let w = NSWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
+            w.isOpaque = false; w.backgroundColor = .clear
+            w.level = .screenSaver; w.ignoresMouseEvents = true; w.hasShadow = false; w.alphaValue = 0
+            w.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+            let v = NSView(frame: NSRect(origin: .zero, size: screen.frame.size))
+            let glow = CAGradientLayer()
+            glow.frame = v.bounds; glow.type = .radial
+            let tint = NSColor.systemOrange
+            glow.colors = [tint.withAlphaComponent(0).cgColor, tint.withAlphaComponent(0).cgColor, tint.withAlphaComponent(0.5).cgColor]
+            glow.locations = [0.0, 0.6, 1.0]
+            glow.startPoint = CGPoint(x: 0.5, y: 0.5); glow.endPoint = CGPoint(x: 1.0, y: 1.0)
+            v.layer = glow; v.wantsLayer = true
+            w.contentView = v; w.orderFrontRegardless(); flashWins.append(w)
+            NSAnimationContext.runAnimationGroup({ c in c.duration = 0.4; w.animator().alphaValue = 1 }) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                    NSAnimationContext.runAnimationGroup({ c in c.duration = 1.0; w.animator().alphaValue = 0 }) {
+                        w.orderOut(nil); self.flashWins.removeAll { $0 === w }
+                    }
                 }
             }
         }
@@ -498,7 +494,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showBanner(_ message: String, good: Bool) {
         bannerWin?.orderOut(nil)
-        guard let screen = NSScreen.main else { return }
+        // Show on whichever screen the cursor is on (likely the one you're working on).
+        let mouse = NSEvent.mouseLocation
+        guard let screen = NSScreen.screens.first(where: { NSMouseInRect(mouse, $0.frame, false) }) ?? NSScreen.main else { return }
         let size = NSSize(width: 380, height: 66)
         let f = NSRect(x: screen.frame.midX - size.width / 2, y: screen.frame.maxY - 170, width: size.width, height: size.height)
         let w = NSWindow(contentRect: f, styleMask: .borderless, backing: .buffered, defer: false)
@@ -551,6 +549,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func calibrate() { model.recalibrate() }
     @objc func showWindow() { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
+    @objc func showPreferences() {
+        if prefs == nil {
+            prefs = PreferencesController(
+                model: model,
+                onChange: { [weak self] in
+                    self?.buildMenu(); self?.syncControls()
+                    if let v = self?.model.slouchThresh { self?.sensSlider?.doubleValue = v }
+                },
+                onDock: { [weak self] on in
+                    self?.showDock = on
+                    NSApp.setActivationPolicy(on ? .regular : .accessory)
+                    if on { NSApp.activate(ignoringOtherApps: true) }
+                })
+        }
+        prefs?.show()
+    }
+    @objc func showAbout() { AboutController.show() }
     @objc func togglePause() { model.paused.toggle(); syncControls(); buildMenu() }
     @objc func toggleMute() { model.muted.toggle(); syncControls(); buildMenu() }
     @objc func toggleMuteMenu() { model.muted.toggle(); syncControls(); buildMenu() }
