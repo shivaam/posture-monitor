@@ -41,6 +41,7 @@ final class AppModel {
     private var slouchState = false
     private var slouchSince: Double?
     private var lastAlert = -1e9
+    private var wasAlerted = false      // a nudge fired this slouch episode → chime on recovery
     private let synth = AVSpeechSynthesizer()
 
     // Periodic state machine.
@@ -135,10 +136,11 @@ final class AppModel {
             consecutive += 1
             let trigger = needsTwo ? consecutive >= 2 : consecutive >= 1
             plog("periodic: slouch \(burstSlouch)/\(burstPresent) streak \(consecutive) trigger=\(trigger)")
-            if trigger { fireAlert("Sit up tall — you're slouching", good: false); consecutive = 0 }
+            if trigger { fireAlert("Sit up tall — you're slouching", good: false); wasAlerted = true; consecutive = 0 }
             onModeStatus?(.slouching, "Slouching", "next check in \(mins)m")
         } else {
             consecutive = 0
+            if wasAlerted { wasAlerted = false; fireAlert("Nice — back to good posture", good: true) }
             onModeStatus?(.good, "Good posture ✓", "next check in \(mins)m")
         }
     }
@@ -168,9 +170,15 @@ final class AppModel {
                 let left = max(0, graceSec - held)
                 subtitle = left > 0 ? String(format: "sit up in %.0fs…", left) : "sit up straight"
                 if held >= graceSec && now - lastAlert > config.slouchCooldown {
-                    lastAlert = now; fireAlert("Sit up tall — you're slouching", good: false)
+                    lastAlert = now; wasAlerted = true; fireAlert("Sit up tall — you're slouching", good: false)
                 }
-            } else { slouchSince = nil }
+            } else {
+                slouchSince = nil
+                // Recovery chime — only if a nudge actually fired, and you're clearly back to good.
+                if wasAlerted && present && logic.calibrated {
+                    wasAlerted = false; fireAlert("Nice — back to good posture", good: true)
+                }
+            }
         }
 
         let palette: Palette = !present ? .away : (!logic.calibrated ? .settling : (slouching ? .slouching : .good))
