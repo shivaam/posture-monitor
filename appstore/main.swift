@@ -45,7 +45,7 @@ final class AppModel {
     private let synth = AVSpeechSynthesizer()
 
     // Periodic state machine.
-    private enum Phase { case calibrating, idle, sampling }
+    private enum Phase { case calibrating, idle, sampling, watching }
     private var phase: Phase = .calibrating
     private var ticker: Timer?
     private var nextSampleAt = 0.0
@@ -111,6 +111,8 @@ final class AppModel {
             }
         case .sampling:
             if now >= sampleUntil { endSample() }
+        case .watching:
+            vision.resumeCamera()   // keep the camera on while actively coaching (feed() drives it)
         }
     }
 
@@ -123,24 +125,32 @@ final class AppModel {
     }
 
     private func endSample() {
-        vision.stopCamera(); phase = .idle
-        nextSampleAt = ProcessInfo.processInfo.systemUptime + max(60, intervalMin * 60)
+        let now = ProcessInfo.processInfo.systemUptime
         let mins = Int(intervalMin)
         if burstPresent == 0 {
-            consecutive = 0
-            onModeStatus?(.away, "Away", "next check in \(mins)m")
-            return
+            consecutive = 0; vision.stopCamera(); phase = .idle
+            nextSampleAt = now + max(60, intervalMin * 60)
+            onModeStatus?(.away, "Away", "next check in \(mins)m"); return
         }
         let slouch = burstSlouch * 2 > burstPresent
         if slouch {
             consecutive += 1
-            let trigger = needsTwo ? consecutive >= 2 : consecutive >= 1
-            plog("periodic: slouch \(burstSlouch)/\(burstPresent) streak \(consecutive) trigger=\(trigger)")
-            if trigger { fireAlert("Sit up tall — you're slouching", good: false); wasAlerted = true; consecutive = 0 }
-            onModeStatus?(.slouching, "Slouching", "next check in \(mins)m")
+            plog("periodic: slouch \(burstSlouch)/\(burstPresent) streak \(consecutive)")
+            if !needsTwo || consecutive >= 2 {
+                // Confirmed slouch — DON'T sleep. Keep the camera on and coach continuously
+                // until they sit up (feed() handles the watching logic), then resume the interval.
+                consecutive = 0; phase = .watching; slouchSince = nil
+                onModeStatus?(.slouching, "Slouching", "watching — sit up tall")
+            } else {
+                // First slouchy snapshot — re-check soon to confirm, don't wait the full interval.
+                vision.stopCamera(); phase = .idle; nextSampleAt = now + 60
+                onModeStatus?(.settling, "Re-checking soon", "again in 1m")
+            }
         } else {
             consecutive = 0
             if wasAlerted { wasAlerted = false; fireAlert("Nice — back to good posture", good: true) }
+            vision.stopCamera(); phase = .idle
+            nextSampleAt = now + max(60, intervalMin * 60)
             onModeStatus?(.good, "Good posture ✓", "next check in \(mins)m")
         }
     }
@@ -160,8 +170,28 @@ final class AppModel {
 
         var subtitle = ""
         if mode == .periodic {
-            if phase == .sampling && present && logic.calibrated {
-                burstPresent += 1; if drop > margin { burstSlouch += 1 }
+            if phase == .sampling {
+                if present && logic.calibrated { burstPresent += 1; if drop > margin { burstSlouch += 1 } }
+            } else if phase == .watching {
+                if !present {
+                    // stepped away — stop watching, resume the periodic cadence
+                    slouchSince = nil; phase = .idle; vision.stopCamera()
+                    nextSampleAt = now + max(60, intervalMin * 60)
+                } else if slouching {
+                    if slouchSince == nil { slouchSince = now }
+                    let held = now - (slouchSince ?? now)
+                    let left = max(0, graceSec - held)
+                    subtitle = left > 0 ? String(format: "sit up in %.0fs…", left) : "sit up straight"
+                    if held >= graceSec && now - lastAlert > config.slouchCooldown {
+                        lastAlert = now; wasAlerted = true; fireAlert("Sit up tall — you're slouching", good: false)
+                    }
+                } else {
+                    // recovered — chime, then go back to sleep on the periodic interval
+                    slouchSince = nil
+                    if wasAlerted { wasAlerted = false; fireAlert("Nice — back to good posture", good: true) }
+                    phase = .idle; vision.stopCamera()
+                    nextSampleAt = now + max(60, intervalMin * 60)
+                }
             }
         } else {
             if slouching {
