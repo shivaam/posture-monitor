@@ -132,17 +132,20 @@ final class AppModel {
             nextSampleAt = now + max(60, intervalMin * 60)
             onModeStatus?(.away, "Away", "next check in \(mins)m"); return
         }
-        let slouch = burstSlouch * 2 > burstPresent
-        if slouch {
+        // Decide on your CURRENT posture at the end of the check, not the burst average —
+        // a slouch that starts late in the sample must not get out-voted and let the camera
+        // sleep. slouchState is the (smoothed) state of the most recent frames.
+        let slouchingNow = logic.calibrated && slouchState
+        let majoritySlouch = burstSlouch * 2 > burstPresent
+        if slouchingNow || majoritySlouch {
             consecutive += 1
-            plog("periodic: slouch \(burstSlouch)/\(burstPresent) streak \(consecutive)")
-            if !needsTwo || consecutive >= 2 {
-                // Confirmed slouch — DON'T sleep. Keep the camera on and coach continuously
-                // until they sit up (feed() handles the watching logic), then resume the interval.
+            plog("periodic: slouch now=\(slouchingNow) maj \(burstSlouch)/\(burstPresent) streak \(consecutive)")
+            // If you're slouching right now, watch immediately. Only the "recovered before the
+            // sample ended" case (majority-only) waits for a 2nd confirming check.
+            if slouchingNow || !needsTwo || consecutive >= 2 {
                 consecutive = 0; phase = .watching; slouchSince = nil
                 onModeStatus?(.slouching, "Slouching", "watching — sit up tall")
             } else {
-                // First slouchy snapshot — re-check soon to confirm, don't wait the full interval.
                 vision.stopCamera(); phase = .idle; nextSampleAt = now + 60
                 onModeStatus?(.settling, "Re-checking soon", "again in 1m")
             }
