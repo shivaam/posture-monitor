@@ -78,12 +78,22 @@ final class VisionEngine: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
     var onCameraDenied: (() -> Void)?
     var preferredDevice: AVCaptureDevice?
 
+    private var configured = false
+
     func start() {
         AVCaptureDevice.requestAccess(for: .video) { ok in
             guard ok else { DispatchQueue.main.async { self.onCameraDenied?() }; return }
-            self.queue.async { self.configure(); self.session.startRunning() }
+            self.queue.async {
+                if !self.configured { self.configure(); self.configured = true }
+                self.session.startRunning()
+            }
         }
     }
+
+    /// Turn the camera (and its light) OFF between periodic checks.
+    func stopCamera() { queue.async { if self.session.isRunning { self.session.stopRunning() } } }
+    /// Turn it back ON without reconfiguring.
+    func resumeCamera() { queue.async { if self.configured, !self.session.isRunning { self.session.startRunning() } } }
 
     func switchTo(_ dev: AVCaptureDevice) {
         queue.async {
