@@ -10,6 +10,8 @@
     <string>Don't Let Me Slouch</string>
     <key>CFBundleExecutable</key>
     <string>PostureMonitor</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>

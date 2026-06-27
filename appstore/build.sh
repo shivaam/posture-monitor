@@ -14,6 +14,8 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 cp /tmp/PostureMonitorAS.bin "$APP/Contents/MacOS/PostureMonitor"
 cp Info.plist "$APP/Contents/Info.plist"
+mkdir -p "$APP/Contents/Resources"
+[ -f AppIcon.icns ] && cp AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 # Sign with the sandbox + camera entitlements (ad-hoc is fine for a local run;
 # the Store build re-signs with your Developer ID via Xcode).
