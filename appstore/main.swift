@@ -73,10 +73,12 @@ final class AppModel {
 
     private var napGuard: NSObjectProtocol?
     func start() {
-        // Keep timers/checks from being throttled by App Nap when we run in the
-        // background (no window / camera off between periodic checks). Doesn't block
-        // system sleep — just signals ongoing background work.
-        napGuard = ProcessInfo.processInfo.beginActivity(options: [.background], reason: "Posture monitoring")
+        // Block App Nap so detection keeps running with the window CLOSED / app in the
+        // background. .userInitiatedAllowingIdleSystemSleep prevents the nap but still
+        // lets the Mac idle-sleep normally when you step away.
+        napGuard = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiatedAllowingIdleSystemSleep],
+            reason: "Posture monitoring")
         vision.start()
     }
 
