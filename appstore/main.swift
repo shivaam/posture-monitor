@@ -353,6 +353,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var showDock = true
     var flashWins: [NSWindow] = []
     var bannerWin: NSWindow?
+    var keepAlive: NSWindow?
     var prefs: PreferencesController?
     var cameras: [AVCaptureDevice] = []
     var currentCameraID: String?
@@ -448,6 +449,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if banner { self?.showBanner(msg, good: good) }
         }
         model.vision.onCameraDenied = { [weak self] in self?.cameraDenied() }
+        installKeepAlive()
         model.start()
         model.applyMode()
 
@@ -628,6 +630,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: actions
+
+    // A 1×1, ~invisible, always-on-screen, floating window. AppKit's occlusion
+    // accounting treats a near-transparent on-screen window as "visible", which keeps
+    // the app out of App Nap when the main window is closed — so the camera keeps
+    // delivering frames in the background. MUST stay on screen: never orderOut().
+    private func installKeepAlive() {
+        let ka = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1, height: 1),
+                          styleMask: .borderless, backing: .buffered, defer: false)
+        ka.alphaValue = 0.02
+        ka.backgroundColor = .clear
+        ka.hasShadow = false
+        ka.ignoresMouseEvents = true
+        ka.level = .floating                                  // never fully covered → never occluded
+        ka.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        ka.isExcludedFromWindowsMenu = true
+        ka.isReleasedWhenClosed = false
+        ka.orderFrontRegardless()
+        keepAlive = ka
+    }
 
     @objc func calibrate() { model.recalibrate() }
     @objc func setCamera(_ s: NSMenuItem) {
