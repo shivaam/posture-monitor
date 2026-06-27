@@ -1,6 +1,6 @@
 # App Store listing — PostureMonitor
 
-Fill these into **App Store Connect** when you submit. App is **Free**, category **Health & Fitness**.
+Fill these into **App Store Connect** when you submit. App is **Free**, category **Health & Fitness**, **requires macOS 13 (Ventura) or later** (set by the Xcode deployment target — App Store Connect shows this as the compatibility automatically).
 
 ## Name & subtitle
 - **App Name** (≤30): `PostureMonitor`
@@ -36,6 +36,9 @@ FEATURES
 • Menu-bar status at a glance — green when you’re good, red when you’re slouching.
 • 100% on-device. 100% private. Free.
 
+REQUIREMENTS
+• macOS 13 (Ventura) or later, with a camera — your built-in webcam is perfect.
+
 Sit taller, feel better. PostureMonitor quietly has your back.
 ```
 
@@ -67,8 +70,8 @@ hidden windows); a "Compact window" mode shrinks it to a status pill.
 
 ## Screenshots
 - Required size (macOS): **2560×1600** or **1280×800** (16:10). 1–10 images.
-- Plan: see `make_screenshots.sh` — captures the app and blurs the face, framed with captions. Suggested set:
-  1. Good posture (main window) — “Sit up straight, gently.”
-  2. Slouching nudge — “A calm nudge when you slump.”
-  3. Preferences — “Your nudges, your way.”
-  4. Compact pill — “Tuck it in a corner.”
+- Ready in `screenshots/` (faces auto-pixelated, framed 2560×1600):
+  1. `1-good.png` — “Sit up straight, gently.”
+  2. `2-slouch.png` — “A calm nudge when you slump.”
+  3. `3-compact.png` — “Tuck it in a corner.”
+- Regenerate / add more with `./make_screenshots.sh "Caption" out.png` while the app window is front.
