@@ -16,7 +16,7 @@ enum AboutController {
     }
 
     private static func build() -> NSWindow {
-        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 380),
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: 380),
                          styleMask: [.titled, .closable], backing: .buffered, defer: false)
         w.title = "About PostureMonitor"
         w.isReleasedWhenClosed = false
@@ -45,9 +45,14 @@ enum AboutController {
         let name = label("PostureMonitor", 20, .bold, .labelColor)
         let ver = label("Version \(version)", 12, .regular, .secondaryLabelColor)
         let tag = label("Gentle posture nudges — 100% on your Mac.", 13, .regular, .labelColor)
-        tag.alignment = .center; tag.maximumNumberOfLines = 2; tag.preferredMaxLayoutWidth = 260
         let privacy = label("Your video is never recorded or sent anywhere.", 11, .regular, .secondaryLabelColor)
-        privacy.alignment = .center; privacy.maximumNumberOfLines = 2; privacy.preferredMaxLayoutWidth = 260
+        for l in [tag, privacy] {
+            l.maximumNumberOfLines = 2
+            l.lineBreakMode = .byWordWrapping
+            (l.cell as? NSTextFieldCell)?.usesSingleLineMode = false
+            l.translatesAutoresizingMaskIntoConstraints = false
+            l.widthAnchor.constraint(equalToConstant: 300).isActive = true
+        }
         let copyright = label("© 2026 · MIT-licensed", 11, .regular, .tertiaryLabelColor)
 
         let stack = NSStackView(views: [mark, name, ver, tag, privacy, copyright])

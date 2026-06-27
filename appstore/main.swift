@@ -41,6 +41,7 @@ final class AppModel {
     private var slouchState = false
     private var slouchSince: Double?
     private var lastAlert = -1e9
+    private var lastFaceSeen = -1e9     // for bridging brief face-detection dropouts
     private var wasAlerted = false      // a nudge fired this slouch episode → chime on recovery
     private let synth = AVSpeechSynthesizer()
 
@@ -70,7 +71,14 @@ final class AppModel {
         vision.onVision = { [weak self] r in self?.feed(r) }
     }
 
-    func start() { vision.start() }
+    private var napGuard: NSObjectProtocol?
+    func start() {
+        // Keep timers/checks from being throttled by App Nap when we run in the
+        // background (no window / camera off between periodic checks). Doesn't block
+        // system sleep — just signals ongoing background work.
+        napGuard = ProcessInfo.processInfo.beginActivity(options: [.background], reason: "Posture monitoring")
+        vision.start()
+    }
 
     func recalibrate() {
         logic.recalibrate(); baseHeadY = nil; slouchState = false; slouchSince = nil
@@ -160,16 +168,21 @@ final class AppModel {
 
     private func feed(_ r: VisionReading) {
         onFace?(r)
-        let present = r.faceFound && !paused
-        _ = logic.update(present: present, head: present ? r.headY : nil)
+        let now = ProcessInfo.processInfo.systemUptime
+        if r.faceFound { lastFaceSeen = now }
+        let faceNow = r.faceFound && !paused
+        // Bridge brief face-detection dropouts. When you slouch, your head dips/turns and
+        // Apple Vision loses your face for a frame or two — without this, `present` flickers
+        // false, which resets the grace timer and the nudge never fires ("keeps pending").
+        let present = !paused && (now - lastFaceSeen <= 1.2)
+        _ = logic.update(present: faceNow, head: faceNow ? r.headY : nil)
         if let b = logic.baseHead, baseHeadY == nil { baseHeadY = b; emaHeadY = b }
-        if present { emaHeadY = emaHeadY * 0.8 + r.headY * 0.2 }
+        if r.faceFound { emaHeadY = emaHeadY * 0.8 + r.headY * 0.2 }
 
         let margin = max(0.015, 0.095 - (slouchThresh - 0.80) * 0.45)
         let drop = (baseHeadY ?? emaHeadY) - emaHeadY
         if drop > margin { slouchState = true } else if drop < margin * 0.6 { slouchState = false }
         let slouching = present && logic.calibrated && slouchState
-        let now = ProcessInfo.processInfo.systemUptime
 
         var subtitle = ""
         if mode == .periodic {
