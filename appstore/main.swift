@@ -339,6 +339,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var flashWins: [NSWindow] = []
     var bannerWin: NSWindow?
     var prefs: PreferencesController?
+    var cameras: [AVCaptureDevice] = []
+    var currentCameraID: String?
 
     func applicationDidFinishLaunching(_ note: Notification) {
         showDock = model.config.showDockIcon
@@ -398,6 +400,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             buttons.trailingAnchor.constraint(equalTo: bg.trailingAnchor, constant: -20),
             buttons.bottomAnchor.constraint(lessThanOrEqualTo: bg.bottomAnchor, constant: -20),
         ])
+
+        // Camera selection (single camera — pick which one; remembered across launches).
+        cameras = availableCameras()
+        if let saved = UserDefaults.standard.string(forKey: "cameraID"),
+           let dev = cameras.first(where: { $0.uniqueID == saved }) {
+            model.vision.preferredDevice = dev; currentCameraID = saved
+        } else {
+            currentCameraID = (cameras.first(where: { $0.deviceType == .builtInWideAngleCamera }) ?? cameras.first)?.uniqueID
+        }
 
         // Menu bar.
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -493,6 +504,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let modeItem = NSMenuItem(title: "Mode", action: nil, keyEquivalent: ""); modeItem.submenu = modeMenu
         m.addItem(modeItem)
+
+        // Camera picker (choose which camera; switches live + recalibrates).
+        let camMenu = NSMenu()
+        if cameras.isEmpty {
+            let it = NSMenuItem(title: "No camera found", action: nil, keyEquivalent: ""); it.isEnabled = false
+            camMenu.addItem(it)
+        } else {
+            for (i, cam) in cameras.enumerated() {
+                let it = NSMenuItem(title: cam.localizedName, action: #selector(setCamera(_:)), keyEquivalent: "")
+                it.tag = i; it.state = (cam.uniqueID == currentCameraID) ? .on : .off; it.target = self
+                camMenu.addItem(it)
+            }
+        }
+        let camItem = NSMenuItem(title: "Camera", action: nil, keyEquivalent: ""); camItem.submenu = camMenu
+        m.addItem(camItem)
         m.addItem(.separator())
 
         let prefsItem = NSMenuItem(title: "Preferences…", action: #selector(showPreferences), keyEquivalent: ",")
@@ -589,6 +615,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: actions
 
     @objc func calibrate() { model.recalibrate() }
+    @objc func setCamera(_ s: NSMenuItem) {
+        guard s.tag >= 0, s.tag < cameras.count else { return }
+        let dev = cameras[s.tag]
+        currentCameraID = dev.uniqueID; Config.set("cameraID", dev.uniqueID)
+        model.vision.switchTo(dev); model.recalibrate(); buildMenu()
+    }
     @objc func showWindow() { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
     @objc func showPreferences() {
         if prefs == nil {
