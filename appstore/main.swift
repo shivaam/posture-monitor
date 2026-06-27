@@ -644,11 +644,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         a.informativeText = """
         1. Sit up straight, then click Calibrate to set your baseline.
         2. Work normally — it nudges you when you slump.
-        3. The menu-bar icon (top right) has everything: Continuous vs Periodic \
-        checking, how you're alerted (sound / screen glow / banner), sensitivity, \
-        and a background mode (uncheck Show Dock icon).
 
-        Everything runs on your Mac — your video is never recorded or sent anywhere.
+        Keep the window open so it can see you. To tuck it away, turn on \
+        “Compact window (hide camera)” in the menu-bar menu — a small status pill \
+        you can park in a corner.
+
+        Heads-up: don’t minimize it. macOS pauses the camera for hidden/minimized \
+        windows, so the compact window is the way to keep it small but watching.
+
+        The menu-bar icon (top right) has the rest — Continuous vs Periodic checking, \
+        alert style (sound / screen-edge glow / banner), sensitivity, and camera pick. \
+        Everything runs on your Mac; your video is never recorded or sent anywhere.
         """
         a.addButton(withTitle: "Got it")
         if let w = window, w.isVisible { a.beginSheetModal(for: w) } else { a.runModal() }
