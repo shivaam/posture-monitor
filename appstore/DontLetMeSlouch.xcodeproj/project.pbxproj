@@ -7,150 +7,128 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		07A18942C8C7CCA10DC7680D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = E3440834FE5A43C4355BC562 /* Assets.xcassets */; };
-		19E166B805D9ECB149350890 /* Engines.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DD89E5273D33D7B53B81F9B /* Engines.swift */; };
-		269C1816F0669F60BB5855FB /* Config.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57AF93930F6D8220502D4FCC /* Config.swift */; };
-		6F3BBABE9100CFBD2DCDA743 /* Views.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72AA71817B817C593516E0C2 /* Views.swift */; };
-		85C132815BC47D884F2936E2 /* Prefs.swift in Sources */ = {isa = PBXBuildFile; fileRef = D85F464BFBBF746B80962159 /* Prefs.swift */; };
-		D86E5318AE6B0AC116CA9114 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96FB39F9F728DFD17349FD9E /* main.swift */; };
+		10992645A307A30C4E871144 /* Config.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2103FC40A0A35CCC89B5E50 /* Config.swift */; };
+		1756F2BDC4C86F698D771C4B /* Views.swift in Sources */ = {isa = PBXBuildFile; fileRef = 737C4D75C54C6C01D1BE8B3E /* Views.swift */; };
+		2C9F5CBE116255A233012156 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AA386A8BDF16A46421C7A162 /* Assets.xcassets */; };
+		8AAE7E074B179A1A7C47C97F /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = A82512B5068BB7B417B4FD95 /* main.swift */; };
+		953AFF7A26C37A621FB15B85 /* Prefs.swift in Sources */ = {isa = PBXBuildFile; fileRef = B21A6711E56ED75146123219 /* Prefs.swift */; };
+		A7542EAA3CD25E5ABCE49700 /* Engines.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAC8AC70E303836472D086BC /* Engines.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		141907D954B3BB87F8A6E627 /* PostureMonitor.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PostureMonitor.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		3DD89E5273D33D7B53B81F9B /* Engines.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Engines.swift; sourceTree = "<group>"; };
-		57AF93930F6D8220502D4FCC /* Config.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Config.swift; sourceTree = "<group>"; };
-		72AA71817B817C593516E0C2 /* Views.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views.swift; sourceTree = "<group>"; };
-		96FB39F9F728DFD17349FD9E /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
-		D85F464BFBBF746B80962159 /* Prefs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Prefs.swift; sourceTree = "<group>"; };
-		E3440834FE5A43C4355BC562 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		2FB918CBDC76F2B61FC6CB81 /* DontLetMeSlouch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DontLetMeSlouch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		737C4D75C54C6C01D1BE8B3E /* Views.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views.swift; sourceTree = "<group>"; };
+		A82512B5068BB7B417B4FD95 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		AA386A8BDF16A46421C7A162 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		AAC8AC70E303836472D086BC /* Engines.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Engines.swift; sourceTree = "<group>"; };
+		B21A6711E56ED75146123219 /* Prefs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Prefs.swift; sourceTree = "<group>"; };
+		F2103FC40A0A35CCC89B5E50 /* Config.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Config.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
-		69EE42A91846E849D208364B /* Products */ = {
+		2D006DD946C39F5855D0042B /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				141907D954B3BB87F8A6E627 /* PostureMonitor.app */,
+				2FB918CBDC76F2B61FC6CB81 /* DontLetMeSlouch.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
 		};
-		DE1B25022A2B803055FB7FA2 = {
+		E9BA8EFFC4F6D63B1DC942DC = {
 			isa = PBXGroup;
 			children = (
-				E3440834FE5A43C4355BC562 /* Assets.xcassets */,
-				57AF93930F6D8220502D4FCC /* Config.swift */,
-				3DD89E5273D33D7B53B81F9B /* Engines.swift */,
-				96FB39F9F728DFD17349FD9E /* main.swift */,
-				D85F464BFBBF746B80962159 /* Prefs.swift */,
-				72AA71817B817C593516E0C2 /* Views.swift */,
-				69EE42A91846E849D208364B /* Products */,
+				AA386A8BDF16A46421C7A162 /* Assets.xcassets */,
+				F2103FC40A0A35CCC89B5E50 /* Config.swift */,
+				AAC8AC70E303836472D086BC /* Engines.swift */,
+				A82512B5068BB7B417B4FD95 /* main.swift */,
+				B21A6711E56ED75146123219 /* Prefs.swift */,
+				737C4D75C54C6C01D1BE8B3E /* Views.swift */,
+				2D006DD946C39F5855D0042B /* Products */,
 			);
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		73F81A146A5C5195717D8D61 /* PostureMonitor */ = {
+		B6A03B882CA772DE16DF1C45 /* DontLetMeSlouch */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 06983264DF608123FFFB2D90 /* Build configuration list for PBXNativeTarget "PostureMonitor" */;
+			buildConfigurationList = F673294F872361DA0380E306 /* Build configuration list for PBXNativeTarget "DontLetMeSlouch" */;
 			buildPhases = (
-				8F70D3C35F6897E977882042 /* Sources */,
-				30C1BB91E172D5C41AEA8BE6 /* Resources */,
+				00C19A6445432096A12779F6 /* Sources */,
+				4CAA39D859A25C52DF5D548B /* Resources */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 			);
-			name = PostureMonitor;
+			name = DontLetMeSlouch;
 			packageProductDependencies = (
 			);
-			productName = PostureMonitor;
-			productReference = 141907D954B3BB87F8A6E627 /* PostureMonitor.app */;
+			productName = DontLetMeSlouch;
+			productReference = 2FB918CBDC76F2B61FC6CB81 /* DontLetMeSlouch.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
-		ABE174D7B87B3F54803C7BC6 /* Project object */ = {
+		D0A06498D8D6BA2C93591EC0 /* Project object */ = {
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
-					73F81A146A5C5195717D8D61 = {
-						DevelopmentTeam = "";
+					B6A03B882CA772DE16DF1C45 = {
 						ProvisioningStyle = Automatic;
 					};
 				};
 			};
-			buildConfigurationList = E058EB1A0A51C67A71D2AB51 /* Build configuration list for PBXProject "PostureMonitor" */;
+			buildConfigurationList = 08F2409253B4322B42E3B91E /* Build configuration list for PBXProject "DontLetMeSlouch" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
 				Base,
 				en,
 			);
-			mainGroup = DE1B25022A2B803055FB7FA2;
+			mainGroup = E9BA8EFFC4F6D63B1DC942DC;
 			minimizedProjectReferenceProxies = 1;
 			preferredProjectObjectVersion = 77;
-			productRefGroup = 69EE42A91846E849D208364B /* Products */;
+			productRefGroup = 2D006DD946C39F5855D0042B /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				73F81A146A5C5195717D8D61 /* PostureMonitor */,
+				B6A03B882CA772DE16DF1C45 /* DontLetMeSlouch */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		30C1BB91E172D5C41AEA8BE6 /* Resources */ = {
+		4CAA39D859A25C52DF5D548B /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				07A18942C8C7CCA10DC7680D /* Assets.xcassets in Resources */,
+				2C9F5CBE116255A233012156 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		8F70D3C35F6897E977882042 /* Sources */ = {
+		00C19A6445432096A12779F6 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				269C1816F0669F60BB5855FB /* Config.swift in Sources */,
-				19E166B805D9ECB149350890 /* Engines.swift in Sources */,
-				85C132815BC47D884F2936E2 /* Prefs.swift in Sources */,
-				6F3BBABE9100CFBD2DCDA743 /* Views.swift in Sources */,
-				D86E5318AE6B0AC116CA9114 /* main.swift in Sources */,
+				10992645A307A30C4E871144 /* Config.swift in Sources */,
+				A7542EAA3CD25E5ABCE49700 /* Engines.swift in Sources */,
+				953AFF7A26C37A621FB15B85 /* Prefs.swift in Sources */,
+				1756F2BDC4C86F698D771C4B /* Views.swift in Sources */,
+				8AAE7E074B179A1A7C47C97F /* main.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
-		552397DD0BE267A56DFC8CA8 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = PostureMonitor.entitlements;
-				COMBINE_HIDPI_IMAGES = YES;
-				ENABLE_HARDENED_RUNTIME = YES;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = "Don't Let Me Slouch";
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.healthcare-fitness";
-				INFOPLIST_KEY_NSCameraUsageDescription = "Don't Let Me Slouch watches your sitting posture and gently nudges you when you slump. Video stays on your Mac.";
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/../Frameworks",
-				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.shivam.posturemonitor;
-				PRODUCT_NAME = PostureMonitor;
-				SDKROOT = macosx;
-			};
-			name = Debug;
-		};
-		84A08D37D2279CDCC98683F0 /* Debug */ = {
+		2D4EC9D75AC5F6782BD3E1F6 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -217,12 +195,13 @@
 			};
 			name = Debug;
 		};
-		D054BAB637A717FB3D0C4F81 /* Release */ = {
+		300E66D45BAA3759681031B6 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = PostureMonitor.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = G2QXD77X57;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "Don't Let Me Slouch";
@@ -233,12 +212,34 @@
 					"@executable_path/../Frameworks",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.shivam.posturemonitor;
-				PRODUCT_NAME = PostureMonitor;
+				PRODUCT_NAME = DontLetMeSlouch;
 				SDKROOT = macosx;
 			};
 			name = Release;
 		};
-		E957204E2EC6203CD80C5296 /* Release */ = {
+		32471565E4FC61A2A8794D41 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = PostureMonitor.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = G2QXD77X57;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Don't Let Me Slouch";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.healthcare-fitness";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Don't Let Me Slouch watches your sitting posture and gently nudges you when you slump. Video stays on your Mac.";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.shivam.posturemonitor;
+				PRODUCT_NAME = DontLetMeSlouch;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		4A7F6FF45D214686CD3158BA /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -301,25 +302,25 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		06983264DF608123FFFB2D90 /* Build configuration list for PBXNativeTarget "PostureMonitor" */ = {
+		08F2409253B4322B42E3B91E /* Build configuration list for PBXProject "DontLetMeSlouch" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				552397DD0BE267A56DFC8CA8 /* Debug */,
-				D054BAB637A717FB3D0C4F81 /* Release */,
+				2D4EC9D75AC5F6782BD3E1F6 /* Debug */,
+				4A7F6FF45D214686CD3158BA /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
 		};
-		E058EB1A0A51C67A71D2AB51 /* Build configuration list for PBXProject "PostureMonitor" */ = {
+		F673294F872361DA0380E306 /* Build configuration list for PBXNativeTarget "DontLetMeSlouch" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				84A08D37D2279CDCC98683F0 /* Debug */,
-				E957204E2EC6203CD80C5296 /* Release */,
+				32471565E4FC61A2A8794D41 /* Debug */,
+				300E66D45BAA3759681031B6 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
 		};
 /* End XCConfigurationList section */
 	};
-	rootObject = ABE174D7B87B3F54803C7BC6 /* Project object */;
+	rootObject = D0A06498D8D6BA2C93591EC0 /* Project object */;
 }
