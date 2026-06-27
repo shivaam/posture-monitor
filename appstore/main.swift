@@ -354,6 +354,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var sensSlider: NSSlider?
     var pauseBtn: NSButton?
     var muteBtn: NSButton?
+    var sensRowView: NSStackView?
+    var compactOn = false
+    var pillTopFull: NSLayoutConstraint?
+    var pillTopCompact: NSLayoutConstraint?
+    var buttonsTopFull: NSLayoutConstraint?
+    var buttonsTopCompact: NSLayoutConstraint?
 
     // Menu bar.
     var statusItem: NSStatusItem!
@@ -408,19 +414,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         buttons.spacing = 8; buttons.distribution = .fillEqually; buttons.translatesAutoresizingMaskIntoConstraints = false
         bg.addSubview(buttons)
 
+        // Two layouts: full (with camera preview) and compact (camera hidden) — toggled live.
+        sensRowView = sensRow
+        let pillFull = pill.topAnchor.constraint(equalTo: panel.bottomAnchor, constant: 18)
+        let pillCompact = pill.topAnchor.constraint(equalTo: bg.topAnchor, constant: 18)
+        let btnFull = buttons.topAnchor.constraint(equalTo: sensRow.bottomAnchor, constant: 16)
+        let btnCompact = buttons.topAnchor.constraint(equalTo: subtitle.bottomAnchor, constant: 16)
+        pillTopFull = pillFull; pillTopCompact = pillCompact
+        buttonsTopFull = btnFull; buttonsTopCompact = btnCompact
+        pillCompact.isActive = false; btnCompact.isActive = false
         NSLayoutConstraint.activate([
             panel.topAnchor.constraint(equalTo: bg.topAnchor, constant: 38),
             panel.leadingAnchor.constraint(equalTo: bg.leadingAnchor, constant: 20),
             panel.trailingAnchor.constraint(equalTo: bg.trailingAnchor, constant: -20),
             panel.heightAnchor.constraint(equalTo: panel.widthAnchor, multiplier: 0.75),
-            pill.topAnchor.constraint(equalTo: panel.bottomAnchor, constant: 18),
+            pillFull,
             pill.centerXAnchor.constraint(equalTo: bg.centerXAnchor),
             subtitle.topAnchor.constraint(equalTo: pill.bottomAnchor, constant: 8),
             subtitle.centerXAnchor.constraint(equalTo: bg.centerXAnchor),
             sensRow.topAnchor.constraint(equalTo: subtitle.bottomAnchor, constant: 18),
             sensRow.centerXAnchor.constraint(equalTo: bg.centerXAnchor),
             sens.widthAnchor.constraint(equalToConstant: 200),
-            buttons.topAnchor.constraint(equalTo: sensRow.bottomAnchor, constant: 16),
+            btnFull,
             buttons.leadingAnchor.constraint(equalTo: bg.leadingAnchor, constant: 20),
             buttons.trailingAnchor.constraint(equalTo: bg.trailingAnchor, constant: -20),
             buttons.bottomAnchor.constraint(lessThanOrEqualTo: bg.bottomAnchor, constant: -20),
@@ -460,6 +475,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.vision.onCameraDenied = { [weak self] in self?.cameraDenied() }
         model.start()
         model.applyMode()
+        if UserDefaults.standard.bool(forKey: "compactWindow") { applyCompact(true) }
 
         let firstRun = UserDefaults.standard.bool(forKey: "didShowHelp") == false
         if showDock || firstRun { w.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
@@ -519,6 +535,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         m.addItem(check(model.paused ? "Resume monitoring" : "Pause monitoring", #selector(togglePause), false))
         m.addItem(check("Mute all sounds", #selector(toggleMuteMenu), model.muted))
         m.addItem(check("Show window", #selector(showWindow), false))
+        m.addItem(check("Compact window (hide camera)", #selector(toggleCompact), compactOn))
 
         // Quick mode switch (detailed tuning lives in Preferences).
         let modeMenu = NSMenu()
@@ -640,6 +657,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: actions
 
     @objc func calibrate() { model.recalibrate() }
+
+    /// Compact mode: hide the camera preview + sensitivity slider and shrink the window to
+    /// a small status pill you can park in a corner. The window stays OPEN (visible) — that's
+    /// what keeps the camera alive; minimizing would occlude it and stop frames.
+    private func applyCompact(_ on: Bool) {
+        compactOn = on
+        panel.isHidden = on
+        sensRowView?.isHidden = on
+        pillTopFull?.isActive = !on; pillTopCompact?.isActive = on
+        buttonsTopFull?.isActive = !on; buttonsTopCompact?.isActive = on
+        window.setContentSize(on ? NSSize(width: 420, height: 150) : NSSize(width: 460, height: 580))
+        Config.set("compactWindow", on)
+        buildMenu()
+    }
+    @objc func toggleCompact() { applyCompact(!compactOn); window.makeKeyAndOrderFront(nil) }
+
     @objc func setCamera(_ s: NSMenuItem) {
         guard s.tag >= 0, s.tag < cameras.count else { return }
         let dev = cameras[s.tag]
