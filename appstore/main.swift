@@ -6,8 +6,16 @@
 import AppKit
 import AVFoundation
 
+// Logs to the sandbox container's Caches so we can read it even when launched via `open`:
+//   ~/Library/Containers/com.shivam.posturemonitor/Data/Library/Caches/posture-as.log
+let posLogURL: URL = (FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+    ?? URL(fileURLWithPath: NSTemporaryDirectory())).appendingPathComponent("posture-as.log")
 func plog(_ s: String) {
     FileHandle.standardError.write(("[posture] " + s + "\n").data(using: .utf8) ?? Data())
+    let line = "[\(ISO8601DateFormatter().string(from: Date()))] \(s)\n"
+    guard let d = line.data(using: .utf8) else { return }
+    if let fh = try? FileHandle(forWritingTo: posLogURL) { fh.seekToEndOfFile(); fh.write(d); try? fh.close() }
+    else { try? d.write(to: posLogURL) }
 }
 
 // MARK: - State for the window UI
@@ -42,6 +50,7 @@ final class AppModel {
     private var slouchSince: Double?
     private var lastAlert = -1e9
     private var lastFaceSeen = -1e9     // for bridging brief face-detection dropouts
+    private var frameCount = 0          // diagnostic: heartbeat to confirm frames flow in background
     private var wasAlerted = false      // a nudge fired this slouch episode → chime on recovery
     private let synth = AVSpeechSynthesizer()
 
@@ -449,7 +458,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if banner { self?.showBanner(msg, good: good) }
         }
         model.vision.onCameraDenied = { [weak self] in self?.cameraDenied() }
-        installKeepAlive()
         model.start()
         model.applyMode()
 
@@ -630,25 +638,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: actions
-
-    // A 1×1, ~invisible, always-on-screen, floating window. AppKit's occlusion
-    // accounting treats a near-transparent on-screen window as "visible", which keeps
-    // the app out of App Nap when the main window is closed — so the camera keeps
-    // delivering frames in the background. MUST stay on screen: never orderOut().
-    private func installKeepAlive() {
-        let ka = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1, height: 1),
-                          styleMask: .borderless, backing: .buffered, defer: false)
-        ka.alphaValue = 0.02
-        ka.backgroundColor = .clear
-        ka.hasShadow = false
-        ka.ignoresMouseEvents = true
-        ka.level = .floating                                  // never fully covered → never occluded
-        ka.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
-        ka.isExcludedFromWindowsMenu = true
-        ka.isReleasedWhenClosed = false
-        ka.orderFrontRegardless()
-        keepAlive = ka
-    }
 
     @objc func calibrate() { model.recalibrate() }
     @objc func setCamera(_ s: NSMenuItem) {
