@@ -687,6 +687,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ s: NSApplication) -> Bool { false }
 }
 
+// Disable App Nap for this app: a posture monitor must keep watching even when its
+// window is hidden / it isn't the front app. This throttles only THIS app's nap
+// behavior — the Mac still sleeps normally when globally idle.
+UserDefaults.standard.set(true, forKey: "NSAppSleepDisabled")
+
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate
