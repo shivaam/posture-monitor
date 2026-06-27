@@ -18,7 +18,7 @@ enum AboutController {
     private static func build() -> NSWindow {
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: 380),
                          styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        w.title = "About PostureMonitor"
+        w.title = "About Don't Let Me Slouch"
         w.isReleasedWhenClosed = false
         let bg = NSVisualEffectView(frame: w.contentView!.bounds)
         bg.autoresizingMask = [.width, .height]; bg.material = .windowBackground; bg.state = .active
@@ -42,7 +42,7 @@ enum AboutController {
         mark.addSubview(glyph)
 
         let version = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "1.0"
-        let name = label("PostureMonitor", 20, .bold, .labelColor)
+        let name = label("Don't Let Me Slouch", 20, .bold, .labelColor)
         let ver = label("Version \(version)", 12, .regular, .secondaryLabelColor)
         let tag = label("Gentle posture nudges — 100% on your Mac.", 13, .regular, .labelColor)
         let privacy = label("Your video is never recorded or sent anywhere.", 11, .regular, .secondaryLabelColor)
@@ -140,7 +140,7 @@ final class PreferencesController: NSObject {
 
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 520),
                          styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        w.title = "PostureMonitor Settings"; w.isReleasedWhenClosed = false
+        w.title = "Don't Let Me Slouch — Settings"; w.isReleasedWhenClosed = false
         let bg = NSVisualEffectView(frame: w.contentView!.bounds)
         bg.autoresizingMask = [.width, .height]; bg.material = .windowBackground; bg.state = .active
         w.contentView = bg

@@ -27,7 +27,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.shivam.posturemonitor
         PRODUCT_NAME: PostureMonitor
         GENERATE_INFOPLIST_FILE: "YES"
-        INFOPLIST_KEY_NSCameraUsageDescription: "PostureMonitor watches your sitting posture and gently nudges you when you slump. Video stays on your Mac."
+        INFOPLIST_KEY_CFBundleDisplayName: "Don't Let Me Slouch"
+        INFOPLIST_KEY_NSCameraUsageDescription: "Don't Let Me Slouch watches your sitting posture and gently nudges you when you slump. Video stays on your Mac."
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.healthcare-fitness
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_ENTITLEMENTS: PostureMonitor.entitlements

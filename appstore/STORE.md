@@ -1,9 +1,9 @@
-# App Store listing — PostureMonitor
+# App Store listing — Don't Let Me Slouch
 
 Fill these into **App Store Connect** when you submit. App is **Free**, category **Health & Fitness**, **requires macOS 13 (Ventura) or later** (set by the Xcode deployment target — App Store Connect shows this as the compatibility automatically).
 
 ## Name & subtitle
-- **App Name** (≤30): `PostureMonitor`
+- **App Name** (≤30): `Don't Let Me Slouch`
 - **Subtitle** (≤30): `Gentle posture nudges`
 
 ## Promotional text (≤170)
@@ -16,7 +16,7 @@ posture,slouch,ergonomics,neck,back,sitting,desk,health,wellness,reminder,wfh,sp
 
 ## Description
 ```
-PostureMonitor is a calm, private posture coach that lives in your Mac’s menu bar.
+Don't Let Me Slouch is a calm, private posture coach that lives in your Mac’s menu bar.
 Sit up straight, calibrate once, and it gently nudges you whenever you start to
 slump — so you build a better habit without thinking about it.
 
@@ -39,7 +39,7 @@ FEATURES
 REQUIREMENTS
 • macOS 13 (Ventura) or later, with a camera — your built-in webcam is perfect.
 
-Sit taller, feel better. PostureMonitor quietly has your back.
+Sit taller, feel better. Don't Let Me Slouch quietly has your back.
 ```
 
 ## What’s New (version 1.0)
@@ -60,7 +60,7 @@ sensitivity, and a compact corner mode. Everything stays on your Mac.
 
 ## Review notes (paste into "Notes for Reviewer")
 ```
-PostureMonitor uses the Mac’s camera purely for on-device posture detection
+Don't Let Me Slouch uses the Mac’s camera purely for on-device posture detection
 (Apple Vision). No video or images are recorded, stored, or transmitted; there
 is no network activity and no account. To test: grant camera access, sit upright
 and click Calibrate, then slump — a nudge fires after the grace period. The app

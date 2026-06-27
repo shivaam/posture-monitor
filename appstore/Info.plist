@@ -7,7 +7,7 @@
     <key>CFBundleName</key>
     <string>PostureMonitor</string>
     <key>CFBundleDisplayName</key>
-    <string>PostureMonitor</string>
+    <string>Don't Let Me Slouch</string>
     <key>CFBundleExecutable</key>
     <string>PostureMonitor</string>
     <key>CFBundlePackageType</key>
@@ -21,6 +21,6 @@
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.healthcare-fitness</string>
     <key>NSCameraUsageDescription</key>
-    <string>PostureMonitor watches your sitting posture and gently nudges you when you slump. Video stays on your Mac.</string>
+    <string>Don't Let Me Slouch watches your sitting posture and gently nudges you when you slump. Video stays on your Mac.</string>
 </dict>
 </plist>

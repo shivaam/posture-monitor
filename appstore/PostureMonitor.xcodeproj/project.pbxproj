@@ -137,8 +137,9 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Don't Let Me Slouch";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.healthcare-fitness";
-				INFOPLIST_KEY_NSCameraUsageDescription = "PostureMonitor watches your sitting posture and gently nudges you when you slump. Video stays on your Mac.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Don't Let Me Slouch watches your sitting posture and gently nudges you when you slump. Video stays on your Mac.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -224,8 +225,9 @@
 				COMBINE_HIDPI_IMAGES = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Don't Let Me Slouch";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.healthcare-fitness";
-				INFOPLIST_KEY_NSCameraUsageDescription = "PostureMonitor watches your sitting posture and gently nudges you when you slump. Video stays on your Mac.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Don't Let Me Slouch watches your sitting posture and gently nudges you when you slump. Video stays on your Mac.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",

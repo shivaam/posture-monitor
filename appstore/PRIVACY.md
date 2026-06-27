@@ -1,15 +1,15 @@
-# PostureMonitor — Privacy Policy
+# Don't Let Me Slouch — Privacy Policy
 
 _Last updated: 2026_
 
-PostureMonitor is designed to be completely private.
+Don't Let Me Slouch is designed to be completely private.
 
 ## What we collect
-**Nothing.** PostureMonitor does not collect, store, transmit, or share any
+**Nothing.** Don't Let Me Slouch does not collect, store, transmit, or share any
 personal data.
 
 ## Camera
-PostureMonitor uses your Mac's camera **only** to detect your sitting posture, in
+Don't Let Me Slouch uses your Mac's camera **only** to detect your sitting posture, in
 real time, **on your device**, using Apple's built-in Vision framework.
 
 - Your camera feed is **never recorded** to disk.
@@ -26,7 +26,7 @@ Your preferences (sensitivity, alert style, etc.) are stored locally on your Mac
 in standard app settings and never leave the device.
 
 ## Children
-PostureMonitor does not collect data from anyone, including children.
+Don't Let Me Slouch does not collect data from anyone, including children.
 
 ## Changes
 If this policy ever changes, the updated version will be posted here.

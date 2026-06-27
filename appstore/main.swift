@@ -379,7 +379,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 580),
                          styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
-        w.title = "PostureMonitor"; w.titlebarAppearsTransparent = true; w.center()
+        w.title = "Don't Let Me Slouch"; w.titlebarAppearsTransparent = true; w.center()
         w.isReleasedWhenClosed = false
         window = w
 
@@ -515,7 +515,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             b.contentTintColor = (p == .away) ? nil : p.color
             b.toolTip = text
         }
-        statusMenuItem?.title = text.isEmpty ? "PostureMonitor" : text
+        statusMenuItem?.title = text.isEmpty ? "Don't Let Me Slouch" : text
     }
 
     private func check(_ title: String, _ action: Selector, _ on: Bool, tag: Int = 0, enabled: Bool = true) -> NSMenuItem {
@@ -565,9 +565,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let prefsItem = NSMenuItem(title: "Preferences…", action: #selector(showPreferences), keyEquivalent: ",")
         prefsItem.target = self; m.addItem(prefsItem)
-        m.addItem(check("About PostureMonitor", #selector(showAbout), false))
+        m.addItem(check("About Don't Let Me Slouch", #selector(showAbout), false))
         m.addItem(.separator())
-        let q = NSMenuItem(title: "Quit PostureMonitor", action: #selector(quit), keyEquivalent: "q")
+        let q = NSMenuItem(title: "Quit Don't Let Me Slouch", action: #selector(quit), keyEquivalent: "q")
         q.target = self; m.addItem(q)
         statusItem.menu = m
     }
@@ -640,7 +640,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func showHelp() {
         UserDefaults.standard.set(true, forKey: "didShowHelp")
         let a = NSAlert()
-        a.messageText = "Welcome to PostureMonitor"
+        a.messageText = "Welcome to Don't Let Me Slouch"
         a.informativeText = """
         1. Sit up straight, then click Calibrate to set your baseline.
         2. Work normally — it nudges you when you slump.
