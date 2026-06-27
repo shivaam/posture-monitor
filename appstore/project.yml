@@ -1,0 +1,34 @@
+name: PostureMonitor
+options:
+  bundleIdPrefix: com.shivam
+  deploymentTarget:
+    macOS: "13.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: ""          # set your team in Xcode → Signing & Capabilities
+targets:
+  PostureMonitor:
+    type: application
+    platform: macOS
+    sources:
+      - Engines.swift
+      - Views.swift
+      - Config.swift
+      - Prefs.swift
+      - main.swift
+      - Assets.xcassets
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.shivam.posturemonitor
+        PRODUCT_NAME: PostureMonitor
+        GENERATE_INFOPLIST_FILE: "YES"
+        INFOPLIST_KEY_NSCameraUsageDescription: "PostureMonitor watches your sitting posture and gently nudges you when you slump. Video stays on your Mac."
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.healthcare-fitness
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_ENTITLEMENTS: PostureMonitor.entitlements
+        ENABLE_HARDENED_RUNTIME: "YES"

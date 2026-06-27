@@ -14,3 +14,9 @@ server/pose_landmarker_heavy.task
 # secrets
 server/secret.token
 appstore/PostureMonitor.app
+
+# Xcode
+appstore/*.xcodeproj/xcuserdata/
+appstore/*.xcodeproj/project.xcworkspace/xcuserdata/
+appstore/build/
+DerivedData/

@@ -61,9 +61,10 @@ final class PostureLogic {
 // MARK: - Cameras
 
 func availableCameras() -> [AVCaptureDevice] {
-    AVCaptureDevice.DiscoverySession(
-        deviceTypes: [.builtInWideAngleCamera, .external, .continuityCamera],
-        mediaType: .video, position: .unspecified).devices
+    var types: [AVCaptureDevice.DeviceType] = [.builtInWideAngleCamera]
+    if #available(macOS 14.0, *) { types += [.external, .continuityCamera] }   // USB / iPhone
+    return AVCaptureDevice.DiscoverySession(
+        deviceTypes: types, mediaType: .video, position: .unspecified).devices
 }
 
 // MARK: - Vision engine (camera + face every frame; nothing leaves the process)
