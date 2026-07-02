@@ -50,6 +50,7 @@ final class AppModel {
     private var slouchSince: Double?
     private var lastAlert = -1e9
     private var lastFaceSeen = -1e9     // for bridging brief face-detection dropouts
+    private var audioEngine: AVAudioEngine?   // silent-audio keep-alive (App Nap "audible" exemption)
     private var frameCount = 0          // diagnostic: heartbeat to confirm frames flow in background
     private var wasAlerted = false      // a nudge fired this slouch episode → chime on recovery
     private let synth = AVSpeechSynthesizer()
@@ -88,7 +89,38 @@ final class AppModel {
         napGuard = ProcessInfo.processInfo.beginActivity(
             options: [.userInitiatedAllowingIdleSystemSleep],
             reason: "Posture monitoring")
+        if config.backgroundMonitor { startKeepAliveAudio() }
         vision.start()
+    }
+
+    /// Live toggle for "keep monitoring when the window is closed".
+    func setBackgroundMonitor(_ on: Bool) {
+        config.backgroundMonitor = on
+        if on { startKeepAliveAudio() } else { stopKeepAliveAudio() }
+    }
+
+    /// Background monitoring: a silent audio output stream. Per Apple's App Nap
+    /// criteria an app that "is audible" is exempt — this keeps the camera + timers
+    /// running with NO window visible. Output-only (no mic), zero buffers = true
+    /// silence; small extra power cost, which is why it's a user-facing preference.
+    private func startKeepAliveAudio() {
+        let engine = AVAudioEngine()
+        let format = engine.outputNode.inputFormat(forBus: 0)
+        let silence = AVAudioSourceNode { _, _, frameCount, audioBufferList -> OSStatus in
+            let abl = UnsafeMutableAudioBufferListPointer(audioBufferList)
+            for buf in abl { memset(buf.mData, 0, Int(buf.mDataByteSize)) }
+            return noErr
+        }
+        engine.attach(silence)
+        engine.connect(silence, to: engine.mainMixerNode, format: format)
+        engine.mainMixerNode.outputVolume = 0
+        do { try engine.start(); audioEngine = engine; plog("background-monitor: on") }
+        catch { plog("background-monitor FAILED: \(error.localizedDescription)") }
+    }
+
+    private func stopKeepAliveAudio() {
+        audioEngine?.stop(); audioEngine = nil
+        plog("background-monitor: off (monitoring pauses when the window is closed)")
     }
 
     func recalibrate() {
@@ -645,15 +677,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         1. Sit up straight, then click Calibrate to set your baseline.
         2. Work normally — it nudges you when you slump.
 
-        Keep the window open so it can see you. To tuck it away, turn on \
-        “Compact window (hide camera)” in the menu-bar menu — a small status pill \
-        you can park in a corner.
+        You can close the window: monitoring keeps running in the background, and \
+        the menu-bar icon (top right) always shows your status. Prefer something \
+        visible? “Compact window” shrinks it to a small status pill.
 
-        Heads-up: don’t minimize it. macOS pauses the camera for hidden/minimized \
-        windows, so the compact window is the way to keep it small but watching.
+        Background monitoring uses a tiny bit of extra power — you can turn it off \
+        in Preferences (then keep the window or compact pill open while monitoring).
 
-        The menu-bar icon (top right) has the rest — Continuous vs Periodic checking, \
-        alert style (sound / screen-edge glow / banner), sensitivity, and camera pick. \
+        The menu-bar icon has the rest — Continuous vs Periodic checking, alert \
+        style (sound / screen-edge glow / banner), sensitivity, and camera pick. \
         Everything runs on your Mac; your video is never recorded or sent anywhere.
         """
         a.addButton(withTitle: "Got it")

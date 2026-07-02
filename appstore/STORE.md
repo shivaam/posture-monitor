@@ -49,6 +49,16 @@ sound, screen-edge glow, or banner. Continuous or periodic checking, adjustable
 sensitivity, and a compact corner mode. Everything stays on your Mac.
 ```
 
+## What’s New (version 1.1 — pending)
+```
+• Background monitoring: close the window and it keeps watching — the menu-bar
+  icon always shows your status. (Toggle it in Preferences if you'd rather it
+  pause when the window is closed.)
+• Fixed the app's display name on the store: Don't Let Me Slouch.
+```
+> While editing 1.1 in App Store Connect, also fix **App Information → Name** from
+> "DontLetMeSlouch" to **Don't Let Me Slouch** — it rides along with the version review.
+
 ## Privacy “nutrition label”
 - **Data collection: NONE.** Select **“Data Not Collected.”**
 - All processing is on-device (Apple Vision). No analytics, no network calls, no accounts.

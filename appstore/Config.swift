@@ -19,6 +19,7 @@ struct Config {
     var alertFlash = false           // ⚡ screen-edge glow
     var alertBanner = false          // 💬 floating banner
     var showDockIcon = true          // false = background menu-bar-only app
+    var backgroundMonitor = true     // keep watching with the window closed (silent-audio App Nap exemption)
 
     static func load() -> Config {
         var c = Config()
@@ -34,6 +35,7 @@ struct Config {
         if d.object(forKey: "alertFlash") != nil { c.alertFlash = d.bool(forKey: "alertFlash") }
         if d.object(forKey: "alertBanner") != nil { c.alertBanner = d.bool(forKey: "alertBanner") }
         if d.object(forKey: "showDockIcon") != nil { c.showDockIcon = d.bool(forKey: "showDockIcon") }
+        if d.object(forKey: "backgroundMonitor") != nil { c.backgroundMonitor = d.bool(forKey: "backgroundMonitor") }
         return c
     }
 

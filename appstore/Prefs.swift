@@ -89,7 +89,7 @@ final class PreferencesController: NSObject {
     private var twoCheck: NSButton!
     private var sens: NSSlider!
     private var gracePopup: NSPopUpButton!
-    private var soundCheck, flashCheck, bannerCheck, speakCheck, dockCheck: NSButton!
+    private var soundCheck, flashCheck, bannerCheck, speakCheck, dockCheck, bgCheck: NSButton!
 
     private let intervals = [1, 3, 5, 10]
     private let graces = [3, 5, 8, 12]
@@ -119,6 +119,7 @@ final class PreferencesController: NSObject {
         bannerCheck = checkbox("On-screen banner", #selector(alertsChanged))
         speakCheck = checkbox("Speak “sit up straight”", #selector(alertsChanged))
         dockCheck = checkbox("Show Dock icon (uncheck to run in the background)", #selector(dockChanged))
+        bgCheck = checkbox("Keep monitoring when window is closed (uses a little more power)", #selector(bgChanged))
 
         let stack = NSStackView(views: [
             header("Monitoring"),
@@ -133,6 +134,7 @@ final class PreferencesController: NSObject {
             gap(),
             header("General"),
             indent(dockCheck),
+            indent(bgCheck),
         ])
         stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 9
         stack.edgeInsets = NSEdgeInsets(top: 18, left: 22, bottom: 20, right: 22)
@@ -193,6 +195,7 @@ final class PreferencesController: NSObject {
         bannerCheck.state = model.alertBanner ? .on : .off
         speakCheck.state = model.config.speakAlerts ? .on : .off
         dockCheck.state = UserDefaults.standard.object(forKey: "showDockIcon") as? Bool ?? true ? .on : .off
+        bgCheck.state = model.config.backgroundMonitor ? .on : .off
     }
 
     // MARK: handlers
@@ -223,5 +226,9 @@ final class PreferencesController: NSObject {
     @objc private func dockChanged() {
         let on = dockCheck.state == .on
         Config.set("showDockIcon", on); onDock(on); onChange()
+    }
+    @objc private func bgChanged() {
+        let on = bgCheck.state == .on
+        Config.set("backgroundMonitor", on); model.setBackgroundMonitor(on); onChange()
     }
 }
