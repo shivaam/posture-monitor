@@ -20,3 +20,4 @@ appstore/*.xcodeproj/xcuserdata/
 appstore/*.xcodeproj/project.xcworkspace/xcuserdata/
 appstore/build/
 DerivedData/
+appstore/*.dmg
